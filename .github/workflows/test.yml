@@ -1,0 +1,22 @@
+name: Test engine and Home Assistant
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[test]' voluptuous
+      - run: python tools/sync_engine.py --check
+      - run: python -m pytest tests -q
+  home-assistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: pip install pytest-homeassistant-custom-component
+      - run: python -m pytest tests_ha -q -o asyncio_mode=auto
