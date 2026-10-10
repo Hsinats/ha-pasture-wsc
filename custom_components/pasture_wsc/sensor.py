@@ -7,6 +7,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, VERSION
+from .entity import PaddockEntity
 
 
 @dataclass(frozen=True,kw_only=True)
@@ -30,7 +31,9 @@ SENSORS = (
 
 
 async def async_setup_entry(hass,entry,async_add_entities):
-    async_add_entities(PastureSensor(entry.runtime_data,description) for description in SENSORS)
+    coordinator = entry.runtime_data
+    async_add_entities([*(PastureSensor(coordinator,description) for description in SENSORS),
+        *(PaddockSensor(coordinator,pid,d) for pid in coordinator.store.data["paddocks"] for d in PADDOCK_SENSORS)])
 
 
 class PastureSensor(CoordinatorEntity,SensorEntity):
@@ -83,7 +86,73 @@ class PastureSensor(CoordinatorEntity,SensorEntity):
             result.update({"value":soil.get("value"),"units":soil.get("unit"),"timestamp":soil.get("reported"),
                            "semantics":soil.get("semantics","Unknown"),"fonsch_compatible":False})
         if self.entity_description.key in ("model_status","quality","weather_status"):
-            result["warnings"] = ["experimental_unvalidated","soil_diagnostic_only","paddock_model_phase_3"]
+            result["warnings"] = ["experimental_unvalidated","soil_diagnostic_only","development_is_per_paddock"]
             result["collector_issue_count"] = len(data.get("collector_issues",{}))
             result["collector_issue_types"] = sorted(set(data.get("collector_issues",{}).values()))[:20]
         return result
+
+
+PADDOCK_SENSORS = (
+    *(PastureSensorDescription(key=k,translation_key=k,native_unit_of_measurement="%") for k in
+      ("experimental_wsc","wsc_trend","scenario_wsc","scenario_trend","radiation_effect","temperature_effect","moisture_effect")),
+    *(PastureSensorDescription(key=k,translation_key=k) for k in
+      ("spechr","scenario_spechr","development","moisture_factor")),
+    *(PastureSensorDescription(key=k,translation_key=k,native_unit_of_measurement="°C·d") for k in ("gdd","scenario_gdd")),
+    *(PastureSensorDescription(key=k,translation_key=k,entity_category=EntityCategory.DIAGNOSTIC) for k in
+      ("paddock_status","scenario_status","input_quality","history_status","preset","moisture_source","cycle_id","reset_status")),
+    PastureSensorDescription(key="growth_cycle_start",translation_key="growth_cycle_start",device_class=SensorDeviceClass.DATE,entity_category=EntityCategory.DIAGNOSTIC),
+    PastureSensorDescription(key="paddock_last_completed_day",translation_key="paddock_last_completed_day",device_class=SensorDeviceClass.DATE,entity_category=EntityCategory.DIAGNOSTIC),
+)
+
+
+class PaddockSensor(PaddockEntity,SensorEntity):
+    def __init__(self,coordinator,pid,description):
+        super().__init__(coordinator,pid,description.key)
+        self.entity_description = description
+
+    @property
+    def native_value(self):
+        key = self.entity_description.key
+        p = self.paddock
+        primary,scenario = p.get("primary",{}),p.get("scenario",{})
+        if key in ("experimental_wsc","development","moisture_factor","moisture_effect","spechr"):
+            return primary.get(key)
+        if key == "wsc_trend":
+            return primary.get("trend")
+        if key.startswith("scenario_") and key != "scenario_status" and key != "scenario_gdd":
+            return scenario.get({"scenario_wsc":"experimental_wsc","scenario_trend":"trend","scenario_spechr":"spechr"}[key])
+        if key in ("radiation_effect","temperature_effect"):
+            return p.get("weather_effects",{}).get(key,primary.get(key))
+        if key in ("gdd","scenario_gdd"):
+            return p.get(key)
+        if key == "paddock_status":
+            return p.get("status","pending")
+        if key == "scenario_status":
+            return p.get(key,"off")
+        if key == "input_quality":
+            return "observed_or_provider" if p.get("status")=="ready_experimental" else "incomplete_or_assumed"
+        if key == "history_status":
+            return "incomplete" if p.get("history_gap") else "awaiting_data" if not primary else "complete_development_history"
+        if key == "preset":
+            return self.settings["preset"]
+        if key == "moisture_source":
+            return self.settings["moisture_kind"]
+        if key == "cycle_id":
+            return p.get("cycle",{}).get("id")
+        if key == "reset_status":
+            return "confirmation_requested" if p.get("reset_requested") else "no_request"
+        value = p.get("cycle",{}).get("start_date") if key=="growth_cycle_start" else p.get("last_completed_day")
+        return date.fromisoformat(value) if value else None
+
+    @property
+    def extra_state_attributes(self):
+        p = self.paddock
+        return {"day":p.get("day"),"paddock_id":self.pid,"cycle_id":p.get("cycle",{}).get("id"),
+            "model_version":p.get("model_version"),"experimental":True,
+            "wsc_basis":"percent_of_dry_matter",
+            "timezone":p.get("cycle",{}).get("timezone"),"warnings":p.get("warnings",[])[:20],
+            "scenario_enabled":self.settings["scenario_enabled"],"assumed_wi":self.settings["assumed_wi"] if self.settings["scenario_enabled"] else None,
+            "moisture_mode":self.settings["moisture_mode"],"soil_coverage":p.get("soil",{}).get("coverage"),
+            "gdd_base_c":self.settings["gdd_base"],"gdd_is_not_spechr":True,
+            "weather_quality":p.get("weather_quality",[]),"source_data_hash":p.get("input_hash"),
+            "scenario_warnings":p.get("scenario",{}).get("warnings",[])[:20]}

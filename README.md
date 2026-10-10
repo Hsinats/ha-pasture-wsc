@@ -1,20 +1,19 @@
 # Pasture WSC — engine and Home Assistant integration
 
-Experimental pasture water-soluble carbohydrate engine with a Phase 2 Home Assistant
-collection and diagnostics layer. **No horse grazing safety decision is provided.**
-Generic soil moisture is not a calibrated FONSCH water index. Paddock WSC/SPECHR,
-confirmed resets and scenario controls remain Phase 3 work.
+Experimental pasture water-soluble carbohydrate engine with Home Assistant weather collection and Phase 3
+paddock devices, model results and management controls. **No horse grazing safety decision is provided.**
+Generic soil moisture is not a calibrated FONSCH water index. Primary and explicitly assumed scenario results are separate.
 
 ## Install in Home Assistant
 
 1. Copy the entire `custom_components/pasture_wsc` folder into your HA configuration
    directory under `custom_components/`. The bundled engine is included; no separate
-   package is needed. Or extract `dist/pasture_wsc-0.2.0.zip` into that directory.
+   package is needed. Or extract `dist/pasture_wsc-0.3.0.zip` into that directory.
 2. Restart HA. Select **Settings → Devices & services → Add integration → Pasture WSC**.
 3. Accept/override HA location and timezone. Choose optional weather providers,
    daily calculation time, completeness thresholds and explicit fallback policies.
 4. Enter paddock names, one per line. Summer, Winter and Back are editable examples;
-   stable IDs are reserved now, with growth calculations coming in Phase 3.
+   each creates a device with independent results and controls.
 5. Add any source mappings and choose **Save configuration**. No YAML is required.
 
 Uses recent HA APIs: runtime_data, OptionsFlowWithReload, state reporting and forecast
@@ -61,7 +60,7 @@ variables and 100% for solar energy; lowering it does not extrapolate missing en
 Inspect coverage, partial values, fallback proportion and missing interval counts.
 
 An optional soil sensor requires meaning/calibration notes and freshness. It remains
-`fonsch_compatible: false`; its value is diagnostic only. Unknown soil leaves FONSCH
+`fonsch_compatible: false`; its value is diagnostic only. Unknown soil leaves primary FONSCH
 moisture/development and completed model day unavailable.
 
 ## Shared entities
@@ -76,11 +75,11 @@ Entities have stable unique IDs and share an entry device. HA chooses their fina
 | Daily cloud cover / humidity | Time-weighted percent |
 | Daily precipitation | Supported rain increments, mm |
 | FONSCH photoperiod / temperature factors | Independent equation diagnostics |
-| FONSCH moisture / daily development factors | Unavailable pending compatible index and Phase 3 |
+| FONSCH moisture / daily development factors | Shared moisture unavailable; development is per paddock |
 | Weather status / quality | ready, scenario_only or pending_weather |
-| Model status | pending_soil_and_paddock_model |
+| Model status | ready_experimental or pending_paddock_inputs |
 | Last completed weather day | Latest strict eligible weather date |
-| Last completed model day | Unavailable in Phase 2 |
+| Last completed model day | Latest day completed by all enabled paddocks |
 | Soil diagnostic status | Raw value, units, semantics and freshness |
 
 Weather attributes include input day, timezone, units, source, coverage, fallback share,
@@ -102,7 +101,7 @@ old summary contexts. V1 does not prune archives; high-rate sensors increase dis
 **Developer tools → Actions → pasture_wsc.recalculate** accepts an integration entry and
 1–31 completed local dates. It uses retained inputs, preserves previous summary versions,
 and never fabricates backfill. Historical recalculation does not move sensors to an older
-date. Missing weather stays pending; even ready weather does not mark a model day complete.
+date. Missing weather stays pending; ready weather still requires compatible paddock inputs to complete a model day.
 
 ## Engine and development
 
@@ -156,3 +155,38 @@ a future one-time import. Preview and confirmation are deferred; no auto-import 
 - Store failure: preserve the archive and restore backup. Failed-load cleanup cannot
   overwrite an unread archive. Do not delete history to fix an unavailable sensor.
 - Integration missing from the list: check folder placement, restart HA and inspect logs.
+
+## Phase 3 upgrade and paddock management
+
+Overwrite the existing `custom_components/pasture_wsc` folder with the 0.3.0
+package and restart HA. Keep the integration entry: its paddock IDs, collected weather
+and histories are retained. Each named paddock appears as its own device, linked to
+the shared Pasture WSC weather device.
+
+Each paddock has experimental WSC and daily change, cumulative SPECHR, diagnostic GDD,
+separate scenario results, component contributions, statuses, cycle dates and IDs.
+Controls include enable/disable, scenario opt-in, scenario assumed wi, management notes
+and a new-cycle request button. The assumed-wi control is available when its scenario
+is enabled. It never supplies the primary model.
+
+Open **Configure → Manage paddocks → select paddock → Paddock settings** to choose
+moisture semantics and an explicit moisture response. Defaults leave moisture unknown
+and scenarios off. A percent soil sensor remains diagnostic; calibrated primary input
+requires a justified FONSCH-compatible dimensionless index on 0–1, not a VWC conversion.
+For an exploratory scenario, enable it and choose an explicit moisture expression.
+Assumed wi applies throughout that scenario's current cycle; changing it replays the
+cycle and retains previous result versions. Estimated weather stays labeled as such.
+
+The request button opens a persistent notification. To actually reset, use **Start new
+growth cycle** in paddock configuration, review its date and explicitly confirm.
+Only that paddock changes; old cycles and results remain archived. Repeated requests
+with an old cycle ID are rejected. Settings apply immediately; choose **Save
+configuration** afterward to reload changed sensor subscriptions or new paddock entities.
+Disabling a paddock keeps its history, and reenabling replays retained weather.
+
+Collection cannot reconstruct the hours before installation. An incomplete first day
+can block cumulative development until backfilled or a new cycle starts on a fully
+collected day. A weather change alone does not resolve missing historical coverage.
+GDD uses a configurable base (default 5 °C) and is diagnostic, independent of SPECHR.
+Cycles retain their original location and timezone; start a new confirmed cycle to adopt
+a reconfigured location. See [ADR 003](docs/ADR-003-paddocks.md).

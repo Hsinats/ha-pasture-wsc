@@ -1,6 +1,6 @@
 """Integration constants."""
 DOMAIN = "pasture_wsc"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 STORE_VERSION = 1
 MAX_BACKFILL_DAYS = 31
 VARIABLES = ("temperature", "solar_energy", "cloud_cover", "precipitation", "humidity")

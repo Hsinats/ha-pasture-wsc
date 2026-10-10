@@ -31,7 +31,7 @@
       },
       "paddocks": {
         "title": "Reserve paddock identities",
-        "description": "Default names are examples. Stable IDs are created now; growth calculations and confirmed resets arrive in Phase 3. Start dates are pragmatic initialization placeholders.",
+        "description": "Create independently managed paddocks. Each gets a device, results and controls. Initial dates are pragmatic growth-cycle placeholders.",
         "data": {
           "names": "Paddock names (one per line)"
         }
@@ -86,7 +86,9 @@
     "error": {
       "invalid_settings": "Check location, timezone, units and policy values.",
       "invalid_source": "Check source entity domain, variable, semantics, units and counter settings.",
-      "invalid_paddocks": "Enter distinct, non-empty paddock names, one per line."
+      "invalid_paddocks": "Enter distinct, non-empty paddock names, one per line.",
+      "invalid_paddock_settings": "Check paddock name, index compatibility, justification and numeric settings.",
+      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed."
     },
     "abort": {
       "reconfigure_successful": "Location updated; historical records preserved."
@@ -100,7 +102,8 @@
           "add_source": "Add source",
           "edit_source": "Edit source",
           "remove_source": "Remove mapping",
-          "finish": "Save configuration"
+          "finish": "Save configuration",
+          "manage_paddocks": "Manage paddocks"
         }
       },
       "source": {
@@ -131,6 +134,16 @@
         }
       },
       "init": {
+        "title": "Pasture WSC configuration",
+        "menu_options": {
+          "manage_paddocks": "Manage paddocks",
+          "add_paddock": "Add paddock",
+          "weather_settings": "Weather settings",
+          "sources": "Source mappings",
+          "finish": "Save configuration"
+        }
+      },
+      "weather_settings": {
         "title": "Weather and completeness policies",
         "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only.",
         "data": {
@@ -146,12 +159,67 @@
           "soil_semantics": "Soil measurement meaning/calibration notes",
           "soil_freshness": "Soil freshness (seconds)"
         }
+      },
+      "manage_paddocks": {
+        "title": "Select paddock",
+        "data": {
+          "paddock_id": "Paddock"
+        }
+      },
+      "add_paddock": {
+        "title": "Add paddock",
+        "description": "Save configuration afterward to load its entities.",
+        "data": {
+          "name": "Paddock name"
+        }
+      },
+      "paddock_menu": {
+        "title": "Paddock management",
+        "menu_options": {
+          "paddock_settings": "Paddock settings",
+          "confirm_cycle": "Start new growth cycle",
+          "cancel_cycle_request": "Cancel cycle request",
+          "manage_paddocks": "Select another paddock",
+          "finish": "Save configuration"
+        }
+      },
+      "confirm_cycle": {
+        "title": "Confirm new growth cycle",
+        "description": "Start a new cycle for {paddock}, replacing the active cycle starting {previous_start}. Previous cycles and results remain archived. Only this paddock is reset. Missing historical inputs remain missing.",
+        "data": {
+          "start_date": "New cycle start date",
+          "confirm": "Confirm starting a new cycle"
+        }
+      },
+      "paddock_settings": {
+        "title": "Paddock settings",
+        "description": "Settings apply immediately. Save configuration afterward to reload source subscriptions. Generic soil moisture remains diagnostic. A calibrated index requires compatible dimensionless wi and justification. Assumed wi is used only in the explicitly enabled scenario, throughout its cycle.",
+        "data": {
+          "name": "Paddock name",
+          "enabled": "Enable paddock",
+          "notes": "Management notes",
+          "moisture_kind": "Moisture source type",
+          "moisture_entity": "Soil/index sensor",
+          "moisture_semantics": "Measurement meaning and calibration",
+          "moisture_freshness": "Maximum index freshness (seconds)",
+          "index_compatible": "Attest FONSCH-compatible dimensionless index",
+          "moisture_mode": "Explicit moisture response expression",
+          "moisture_justification": "Scientific justification for index and response",
+          "scenario_enabled": "Enable assumed/estimated scenario",
+          "assumed_wi": "Scenario assumed wi (0–1)",
+          "gdd_base": "Diagnostic GDD base temperature (°C)"
+        }
       }
     },
     "error": {
       "invalid_settings": "Check location, timezone, units and policy values.",
       "invalid_source": "Check source entity domain, variable, semantics, units and counter settings.",
-      "invalid_paddocks": "Enter distinct, non-empty paddock names, one per line."
+      "invalid_paddocks": "Enter distinct, non-empty paddock names, one per line.",
+      "invalid_paddock_settings": "Check paddock name, index compatibility, justification and numeric settings.",
+      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed."
+    },
+    "abort": {
+      "integration_not_loaded": "Load the integration before managing paddocks."
     }
   },
   "entity": {
@@ -203,6 +271,92 @@
       },
       "soil_diagnostic": {
         "name": "Soil diagnostic status"
+      },
+      "experimental_wsc": {
+        "name": "Experimental WSC"
+      },
+      "wsc_trend": {
+        "name": "WSC daily change"
+      },
+      "scenario_wsc": {
+        "name": "Scenario WSC"
+      },
+      "scenario_trend": {
+        "name": "Scenario WSC daily change"
+      },
+      "radiation_effect": {
+        "name": "FONSCH radiation contribution"
+      },
+      "temperature_effect": {
+        "name": "FONSCH temperature contribution"
+      },
+      "moisture_effect": {
+        "name": "FONSCH moisture contribution"
+      },
+      "spechr": {
+        "name": "Cumulative SPECHR"
+      },
+      "scenario_spechr": {
+        "name": "Scenario cumulative SPECHR"
+      },
+      "gdd": {
+        "name": "Diagnostic growing degree days"
+      },
+      "scenario_gdd": {
+        "name": "Scenario growing degree days"
+      },
+      "paddock_status": {
+        "name": "Paddock model status"
+      },
+      "scenario_status": {
+        "name": "Scenario status"
+      },
+      "input_quality": {
+        "name": "Paddock input quality"
+      },
+      "history_status": {
+        "name": "Development history status"
+      },
+      "preset": {
+        "name": "Model preset"
+      },
+      "moisture_source": {
+        "name": "Moisture source"
+      },
+      "cycle_id": {
+        "name": "Growth cycle ID"
+      },
+      "reset_status": {
+        "name": "New cycle request status"
+      },
+      "growth_cycle_start": {
+        "name": "Growth cycle start"
+      },
+      "paddock_last_completed_day": {
+        "name": "Last completed paddock day"
+      }
+    },
+    "switch": {
+      "enabled": {
+        "name": "Enable paddock"
+      },
+      "scenario_enabled": {
+        "name": "Enable scenario"
+      }
+    },
+    "number": {
+      "assumed_wi": {
+        "name": "Scenario assumed wi"
+      }
+    },
+    "text": {
+      "notes": {
+        "name": "Management notes"
+      }
+    },
+    "button": {
+      "start_new_growth_cycle": {
+        "name": "Request new growth cycle"
       }
     }
   },
@@ -219,6 +373,27 @@
         },
         "end_date": {
           "name": "Last local date"
+        }
+      }
+    },
+    "start_new_growth_cycle": {
+      "name": "Start confirmed growth cycle",
+      "description": "Archive the active cycle and start a new cycle for one paddock. Requires explicit confirmation and the current cycle ID.",
+      "fields": {
+        "entry_id": {
+          "name": "Integration entry"
+        },
+        "paddock_id": {
+          "name": "Paddock ID"
+        },
+        "start_date": {
+          "name": "Start date"
+        },
+        "expected_cycle_id": {
+          "name": "Current cycle ID"
+        },
+        "confirmed": {
+          "name": "Confirm new cycle"
         }
       }
     }

@@ -44,8 +44,10 @@ async def test_setup_reload_pending_entities_and_store(hass):
     assert entry.runtime_data.data["moisture_factor"] is None
     assert entry.runtime_data.data["last_completed_day"] is None
     sensors = hass.states.async_all("sensor")
-    assert len(sensors) == 16
-    assert all("pasture" in s.entity_id for s in sensors)
+    from custom_components.pasture_wsc.sensor import PADDOCK_SENSORS
+    assert len(sensors) == 16 + 3 * len(PADDOCK_SENSORS)
+    assert len(hass.states.async_all("switch")) == 6
+    assert len(hass.states.async_all("button")) == 3
     saved = deepcopy(entry.runtime_data.store.data["daily"])
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -60,6 +62,7 @@ async def test_options_and_reconfigure_preserve_paddocks(hass):
     entry.add_to_hass(hass)
     before = deepcopy(entry.data["paddocks"])
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"],{"next_step_id":"weather_settings"})
     policy = {k:entry_data()[k] for k in ("weather_entities","calculation_time","minimum_coverage","solar_minimum_coverage",
                                         "allow_estimated","allow_forecast","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
     result = await hass.config_entries.options.async_configure(result["flow_id"],{**policy,"allow_estimated":True})

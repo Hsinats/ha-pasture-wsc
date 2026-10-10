@@ -31,6 +31,20 @@ async def async_setup(hass,config):
 
     hass.services.async_register(DOMAIN,"recalculate",recalculate,schema=vol.Schema({
         vol.Required("entry_id"):str,vol.Required("start_date"):str,vol.Required("end_date"):str}))
+
+    async def new_cycle(call):
+        entry = hass.config_entries.async_get_entry(call.data["entry_id"])
+        if entry is None or entry.domain!=DOMAIN or not getattr(entry,"runtime_data",None):
+            raise HomeAssistantError("Pasture WSC entry is not loaded")
+        try:
+            await entry.runtime_data.async_start_cycle(call.data["paddock_id"],date.fromisoformat(call.data["start_date"]),
+                call.data["expected_cycle_id"],confirmed=call.data["confirmed"])
+        except (ValueError,KeyError) as error:
+            raise HomeAssistantError("Confirm a valid current paddock cycle and start date") from error
+
+    hass.services.async_register(DOMAIN,"start_new_growth_cycle",new_cycle,schema=vol.Schema({
+        vol.Required("entry_id"):str,vol.Required("paddock_id"):str,vol.Required("start_date"):str,
+        vol.Required("expected_cycle_id"):str,vol.Required("confirmed",default=False):bool}))
     return True
 
 
@@ -43,7 +57,7 @@ async def async_setup_entry(hass,entry):
     entry.runtime_data = coordinator
     try:
         await coordinator.async_start()
-        await hass.config_entries.async_forward_entry_setups(entry,[Platform.SENSOR])
+        await hass.config_entries.async_forward_entry_setups(entry,[Platform.SENSOR,Platform.SWITCH,Platform.NUMBER,Platform.TEXT,Platform.BUTTON])
     except Exception as error:
         _LOGGER.exception("Pasture WSC setup failed; retained archive is preserved")
         await coordinator.async_close()
@@ -53,7 +67,7 @@ async def async_setup_entry(hass,entry):
 
 async def async_unload_entry(hass,entry):
     from homeassistant.const import Platform
-    if await hass.config_entries.async_unload_platforms(entry,[Platform.SENSOR]):
+    if await hass.config_entries.async_unload_platforms(entry,[Platform.SENSOR,Platform.SWITCH,Platform.NUMBER,Platform.TEXT,Platform.BUTTON]):
         await entry.runtime_data.async_close()
         return True
     return False

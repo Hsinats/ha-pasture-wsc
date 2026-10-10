@@ -149,6 +149,7 @@ def ha_contract(monkeypatch):
     class Coordinator:
         def __init__(self,hass,*args,**kwargs):
             self.hass,self.data = hass,None
+            self.last_update_success = True
         def async_set_updated_data(self,data):
             self.data = data
         async def async_refresh(self):
@@ -193,11 +194,23 @@ def ha_contract(monkeypatch):
         def __call__(self,value):
             return value
     for name in ("NumberSelector","NumberSelectorConfig","TextSelector","TextSelectorConfig","EntitySelector","EntitySelectorConfig",
-                 "SelectSelector","SelectSelectorConfig","TimeSelector","BooleanSelector"):
+                 "SelectSelector","SelectSelectorConfig","TimeSelector","BooleanSelector","DateSelector"):
         setattr(sys.modules["homeassistant.helpers.selector"],name,Selector)
     sys.modules["homeassistant.helpers"].selector = sys.modules["homeassistant.helpers.selector"]
+    for platform,cls in (("switch","SwitchEntity"),("number","NumberEntity"),("text","TextEntity"),("button","ButtonEntity")):
+        name = f"homeassistant.components.{platform}"
+        monkeypatch.setitem(sys.modules,name,ModuleType(name))
+        setattr(sys.modules[name],cls,type(cls,(),{}))
+    sys.modules["homeassistant.components.number"].NumberMode = SimpleNamespace(BOX="box")
+    sys.modules["homeassistant.const"].EntityCategory.CONFIG = "config"
+    notification = ModuleType("homeassistant.components.persistent_notification")
+    notification.async_create = lambda *args,**kwargs:None
+    monkeypatch.setitem(sys.modules,notification.__name__,notification)
+    sys.modules["homeassistant.components"].persistent_notification = notification
     yield
-    for name in ("custom_components.pasture_wsc.coordinator","custom_components.pasture_wsc.sensor","custom_components.pasture_wsc.config_flow"):
+    for name in ("custom_components.pasture_wsc.coordinator","custom_components.pasture_wsc.sensor","custom_components.pasture_wsc.config_flow",
+                 "custom_components.pasture_wsc.entity","custom_components.pasture_wsc.switch","custom_components.pasture_wsc.number",
+                 "custom_components.pasture_wsc.text","custom_components.pasture_wsc.button"):
         sys.modules.pop(name,None)
 
 
@@ -342,3 +355,31 @@ def test_bundle_and_translations():
     for original in (root/"pasture_wsc").glob("*.py"):
         assert original.read_bytes() == (root/"custom_components/pasture_wsc/engine"/original.name).read_bytes()
     assert json.loads((root/"custom_components/pasture_wsc/strings.json").read_text(encoding="utf-8")) == json.loads((root/"custom_components/pasture_wsc/translations/en.json").read_text(encoding="utf-8"))
+
+
+def test_paddock_platforms_group_by_stable_device_and_request_only(ha_contract):
+    from unittest.mock import AsyncMock
+    from custom_components.pasture_wsc.paddocks import initialize_paddocks
+    from custom_components.pasture_wsc import sensor, switch, number, text, button
+    data = {}
+    initialize_paddocks(data,paddocks_from_names("Summer\nWinter",DAY),"America/Toronto")
+    coordinator = SimpleNamespace(entry=SimpleNamespace(entry_id="entry"),store=SimpleNamespace(data=data),
+        data={"paddocks":{}},last_update_success=True,async_request_cycle=AsyncMock())
+    entry = SimpleNamespace(runtime_data=coordinator)
+    entities = []
+    async def run():
+        for platform in (sensor,switch,number,text,button):
+            await platform.async_setup_entry(None,entry,lambda new:entities.extend(new))
+    asyncio.run(run())
+    paddock_entities = [e for e in entities if hasattr(e,"pid")]
+    assert len(paddock_entities) == 2*(len(sensor.PADDOCK_SENSORS)+5)
+    assert len({e._attr_unique_id for e in entities}) == len(entities)
+    for e in paddock_entities:
+        assert e._attr_device_info["identifiers"] == {("pasture_wsc",f"entry_{e.pid}")}
+        assert e._attr_device_info["via_device"] == ("pasture_wsc","entry")
+    before = deepcopy(data)
+    b = next(e for e in paddock_entities if isinstance(e,button.NewCycleButton))
+    asyncio.run(b.async_press())
+    coordinator.async_request_cycle.assert_awaited_once_with(b.pid)
+    assert data == before
+    assert all(not e.available for e in paddock_entities if isinstance(e,number.AssumedMoistureNumber))

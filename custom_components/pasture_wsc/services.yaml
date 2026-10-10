@@ -18,3 +18,29 @@ recalculate:
       required: true
       selector:
         date:
+start_new_growth_cycle:
+  name: Confirm a new paddock growth cycle
+  description: Archives the selected cycle. Requires explicit confirmation and the current cycle ID; repeated requests with the old ID are rejected. Prefer the paddock confirmation UI.
+  fields:
+    entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: pasture_wsc
+    paddock_id:
+      required: true
+      selector:
+        text:
+    start_date:
+      required: true
+      selector:
+        date:
+    expected_cycle_id:
+      required: true
+      selector:
+        text:
+    confirmed:
+      required: true
+      default: false
+      selector:
+        boolean:

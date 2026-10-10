@@ -1,6 +1,6 @@
 """UI configuration, options and location reconfiguration."""
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,6 +15,7 @@ from homeassistant.helpers import selector
 
 from .const import DEFAULTS, DOMAIN
 from .settings import paddocks_from_names, settings, validate, validate_source
+from .paddocks import DEFAULT_PADDOCK, validate_paddock
 
 
 def location_schema(values):
@@ -42,7 +43,10 @@ def policy_schema(values):
 class SourceSteps:
     """Same source editor for setup and options; stable source IDs on edits."""
     async def async_step_sources(self, user_input=None):
-        return self.async_show_menu(step_id="sources",menu_options=["add_source","edit_source","remove_source","finish"])
+        steps = ["add_source","edit_source","remove_source"]
+        if getattr(self,"_is_options",False):
+            steps.append("manage_paddocks")
+        return self.async_show_menu(step_id="sources",menu_options=steps+["finish"])
 
     async def async_step_add_source(self, user_input=None):
         self._edit_id = None
@@ -167,13 +171,103 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
         if not hasattr(self,"_values"):
             self._values = settings(self.config_entry)
             self._edit_id = None
+            self._is_options = True
+        if user_input is not None:
+            return await self.async_step_weather_settings(user_input)
+        return self.async_show_menu(step_id="init",menu_options=["manage_paddocks","add_paddock","weather_settings","sources","finish"])
+
+    async def async_step_weather_settings(self,user_input=None):
         if user_input is not None:
             try:
                 self._values = validate({**self._values, "soil_entity":"", **user_input})
             except (ValueError,KeyError):
-                return self.async_show_form(step_id="init",data_schema=policy_schema(self._values),errors={"base":"invalid_settings"})
+                return self.async_show_form(step_id="weather_settings",data_schema=policy_schema(self._values),errors={"base":"invalid_settings"})
             return await self.async_step_sources()
-        return self.async_show_form(step_id="init",data_schema=self.add_suggested_values_to_schema(policy_schema(self._values),self._values))
+        return self.async_show_form(step_id="weather_settings",data_schema=self.add_suggested_values_to_schema(policy_schema(self._values),self._values))
+
+    def _coordinator(self):
+        coordinator = getattr(self.config_entry,"runtime_data",None)
+        if coordinator is None:
+            raise ValueError("Integration must be loaded to manage paddocks")
+        return coordinator
+
+    async def async_step_manage_paddocks(self,user_input=None):
+        try:
+            coordinator = self._coordinator()
+        except ValueError:
+            return self.async_abort(reason="integration_not_loaded")
+        if user_input is not None:
+            self._paddock_id = user_input["paddock_id"]
+            self._cycle_id = coordinator.store.data["paddocks"][self._paddock_id]["cycle"]["id"]
+            return await self.async_step_paddock_menu()
+        options = [{"value":pid,"label":p["settings"]["name"]} for pid,p in coordinator.store.data["paddocks"].items()]
+        return self.async_show_form(step_id="manage_paddocks",data_schema=vol.Schema({vol.Required("paddock_id"):
+            selector.SelectSelector(selector.SelectSelectorConfig(options=options))}))
+
+    async def async_step_paddock_menu(self,user_input=None):
+        return self.async_show_menu(step_id="paddock_menu",menu_options=["paddock_settings","confirm_cycle","cancel_cycle_request","manage_paddocks","finish"])
+
+    async def async_step_paddock_settings(self,user_input=None):
+        coordinator = self._coordinator()
+        p = coordinator.store.data["paddocks"][self._paddock_id]["settings"]
+        errors = {}
+        if user_input is not None:
+            try:
+                await coordinator.async_update_paddock(self._paddock_id,{"moisture_entity":"",**user_input})
+            except ValueError:
+                errors["base"] = "invalid_paddock_settings"
+            else:
+                return await self.async_step_paddock_menu()
+        schema = vol.Schema({
+            vol.Required("name",default=p["name"]):selector.TextSelector(),
+            vol.Required("enabled",default=p["enabled"]):selector.BooleanSelector(),
+            vol.Required("notes",default=p["notes"]):selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+            vol.Required("moisture_kind",default=p["moisture_kind"]):selector.SelectSelector(selector.SelectSelectorConfig(options=["unknown","shared_diagnostic","diagnostic_sensor","calibrated_index"])),
+            vol.Optional("moisture_entity"):selector.EntitySelector(selector.EntitySelectorConfig(filter={"domain":"sensor"})),
+            vol.Required("moisture_semantics",default=p["moisture_semantics"]):selector.TextSelector(),
+            vol.Required("moisture_freshness",default=p["moisture_freshness"]):selector.NumberSelector(selector.NumberSelectorConfig(min=60,max=86400,mode="box")),
+            vol.Required("index_compatible",default=p["index_compatible"]):selector.BooleanSelector(),
+            vol.Required("moisture_mode",default=p["moisture_mode"]):selector.SelectSelector(selector.SelectSelectorConfig(options=["unset","wi_over_reference_minus_one","one_minus_wi_over_reference"])),
+            vol.Required("moisture_justification",default=p["moisture_justification"]):selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+            vol.Required("scenario_enabled",default=p["scenario_enabled"]):selector.BooleanSelector(),
+            vol.Required("assumed_wi",default=p["assumed_wi"]):selector.NumberSelector(selector.NumberSelectorConfig(min=0,max=1,step=.01,mode="box")),
+            vol.Required("gdd_base",default=p["gdd_base"]):selector.NumberSelector(selector.NumberSelectorConfig(min=-10,max=20,mode="box")),
+        })
+        return self.async_show_form(step_id="paddock_settings",data_schema=self.add_suggested_values_to_schema(schema,p),errors=errors)
+
+    async def async_step_confirm_cycle(self,user_input=None):
+        coordinator = self._coordinator()
+        p = coordinator.store.data["paddocks"][self._paddock_id]
+        today = datetime.now(ZoneInfo(self._values["timezone"])).date()
+        errors = {}
+        if user_input is not None:
+            try:
+                await coordinator.async_start_cycle(self._paddock_id,date.fromisoformat(user_input["start_date"]),
+                    self._cycle_id,confirmed=user_input["confirm"])
+            except (ValueError,KeyError):
+                errors["base"] = "cycle_confirmation_required"
+            else:
+                self._cycle_id = p["cycle"]["id"]
+                return await self.async_step_paddock_menu()
+        return self.async_show_form(step_id="confirm_cycle",errors=errors,
+            description_placeholders={"paddock":p["settings"]["name"],"previous_start":p["cycle"]["start_date"]},
+            data_schema=vol.Schema({vol.Required("start_date",default=today.isoformat()):selector.DateSelector(),
+                                   vol.Required("confirm",default=False):selector.BooleanSelector()}))
+
+    async def async_step_cancel_cycle_request(self,user_input=None):
+        await self._coordinator().async_cancel_cycle_request(self._paddock_id)
+        return await self.async_step_paddock_menu()
+
+    async def async_step_add_paddock(self,user_input=None):
+        errors = {}
+        if user_input is not None:
+            try:
+                await self._coordinator().async_add_paddock(user_input["name"])
+            except ValueError:
+                errors["base"] = "invalid_paddocks"
+            else:
+                return await self.async_step_manage_paddocks()
+        return self.async_show_form(step_id="add_paddock",errors=errors,data_schema=vol.Schema({vol.Required("name"):selector.TextSelector()}))
 
     async def async_step_finish(self,user_input=None):
         # Paddocks are never rewritten by source/policy changes.
