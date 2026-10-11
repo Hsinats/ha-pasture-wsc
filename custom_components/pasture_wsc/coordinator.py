@@ -25,6 +25,7 @@ from .weather import (build_intervals, capture, decode_interval, forecast_record
                        serializable, source_key, sources_for)
 from .paddocks import initialize_paddocks, calculate_paddock, update_paddock, start_cycle
 from .settings import paddocks_from_names
+from .backfill import fetch_history, location, MAX_HISTORY_DAYS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +85,16 @@ def daily_record(day, config, data):
     start,end = local_day_bounds(day,config["timezone"])
     raw = day_observations(data["observations"],start,end)
     intervals,policies,anomalies = build_intervals(raw,config)
+    if config.get("historical_backfill"):
+        for item in data.get("historical_weather",{}).values():
+            if item["location"] != location(config):
+                continue
+            interval = decode_interval(item["interval"])
+            if interval.start < end and interval.end > start:
+                intervals.append(interval)
+                if not any(p.source==interval.source for p in policies[interval.variable]):
+                    policies[interval.variable].append(SourcePolicy(interval.source,1100,86400,
+                        frozenset({Quality.OBSERVED,Quality.PROVIDER,Quality.ESTIMATED})))
     if config["allow_forecast"]:
         for item in data["forecasts"].values():
             interval = decode_interval(item)
@@ -93,7 +104,7 @@ def daily_record(day, config, data):
                 if not any(p.source == interval.source for p in policies[variable]):
                     entity = interval.source[len("forecast:"):].rsplit(":",1)[0]
                     rank = config["weather_entities"].index(entity) if entity in config["weather_entities"] else 1000
-                    policies[variable].append(SourcePolicy(interval.source,500+rank,86400,frozenset({Quality.FORECAST})))
+                    policies[variable].append(SourcePolicy(interval.source,1500+rank,86400,frozenset({Quality.FORECAST})))
     summaries = {}
     for name in ("temperature","cloud_cover","humidity","precipitation"):
         variable = Variable(name)
@@ -101,7 +112,7 @@ def daily_record(day, config, data):
     estimates = estimated_solar(day,config,summaries["cloud_cover"])
     if estimates:
         intervals.extend(estimates)
-        policies[Variable.SOLAR_ENERGY].append(SourcePolicy("astronomy_cloud",900,86400,
+        policies[Variable.SOLAR_ENERGY].append(SourcePolicy("astronomy_cloud",2000,86400,
             frozenset({Quality.ESTIMATED,Quality.ASSUMED,Quality.FORECAST})))
     summaries["solar_energy"] = resolve_day(day,config["timezone"],Variable.SOLAR_ENERGY,intervals,
         policies[Variable.SOLAR_ENERGY],minimum_coverage=config["solar_minimum_coverage"])
@@ -135,6 +146,8 @@ class PastureCoordinator(DataUpdateCoordinator):
         self.closed = False
         self._seen = {}
         self._operation_lock = asyncio.Lock()
+        self._history_lock = asyncio.Lock()
+        self._last_history_attempt = None
 
     async def async_start(self):
         await self.store.load()
@@ -208,7 +221,7 @@ class PastureCoordinator(DataUpdateCoordinator):
                 item = capture(source,state,now,initial=initial)
                 item.update({"paddock_id":pid,"entity_id":p["moisture_entity"],"freshness":p["moisture_freshness"],
                     "compatible":p["moisture_kind"] == "calibrated_index" and p["index_compatible"],
-                    "semantics":p["moisture_semantics"],"justification":p["moisture_justification"]})
+                    "semantics":p["moisture_semantics"]})
                 self.store.data["soil_observations"].append(item)
             if self.config["allow_forecast"] and (self.last_forecast is None or now-self.last_forecast >= timedelta(hours=1)):
                 await self._collect_forecasts(now)
@@ -254,7 +267,50 @@ class PastureCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         now = datetime.now(timezone.utc)
         day = scheduled_day(now,self.config["timezone"],self.config["calculation_time"])
+        if self.config.get("historical_backfill") and (self._last_history_attempt is None or
+                now-self._last_history_attempt >= timedelta(hours=1)):
+            self._last_history_attempt = now
+            starts = [date.fromisoformat(p["cycle"]["start_date"]) for p in self.store.data["paddocks"].values()
+                      if p["settings"]["enabled"]]
+            first = max(min(starts,default=day),day-timedelta(days=MAX_HISTORY_DAYS-1))
+            snapshot = deepcopy(self.store.data)
+            missing = []
+            for offset in range(max(0,(day-first).days+1)):
+                candidate = first+timedelta(days=offset)
+                record = await self.hass.async_add_executor_job(daily_record,candidate,self.config,snapshot)
+                if any(record["weather"][k]["coverage"] < 1 for k in ("temperature","solar_energy")):
+                    missing.append(candidate)
+            if missing:
+                try:
+                    await self.async_backfill(missing[0],missing[-1],publish=False)
+                except ValueError as error:
+                    self.store.data["collector_issues"]["historical_weather"] = str(error)
+                    _LOGGER.warning("Pasture historical weather backfill failed: %s",error)
         return await self.async_recalculate(day-timedelta(days=6),day,publish=False)
+
+    async def async_backfill(self,start,end,*,publish=True):
+        """Read local history first; failures never erase retained inputs."""
+        async with self._history_lock:
+            records = await fetch_history(self.hass,start,end,self.config)
+            async with self._operation_lock:
+                for interval in records:
+                    key = f"{interval['source']}|{interval['start']}"
+                    self.store.data["historical_weather"][key] = {
+                        "interval":interval,"location":location(self.config)}
+                self.config["historical_backfill"] = True
+                self.store.data["collector_issues"].pop("historical_weather",None)
+                await self.store.save()
+            if publish:
+                self.hass.config_entries.async_update_entry(self.entry,
+                    options={**self.entry.options,"historical_backfill":True})
+        # Refresh all fetched dates, including dates outside the routine seven-day retry.
+        result = None
+        point = start
+        while point <= end:
+            stop = min(end,point+timedelta(days=MAX_BACKFILL_DAYS-1))
+            result = await self.async_recalculate(point,stop,publish=publish)
+            point = stop+timedelta(days=1)
+        return result
 
     async def async_recalculate(self,start,end,*,publish=True):
         if end < start or (end-start).days >= MAX_BACKFILL_DAYS:
@@ -319,17 +375,27 @@ class PastureCoordinator(DataUpdateCoordinator):
             await self.store.save()
         from homeassistant.components import persistent_notification
         persistent_notification.async_create(self.hass,
-            f"To start a new growth cycle for {state['settings']['name']}, open Pasture WSC Configure → Manage paddocks → select this paddock → Start new growth cycle. Review the date and confirm. The current cycle has not changed.",
+            f"To set the growth start date for {state['settings']['name']}, open Pasture WSC Configure → Manage paddocks → select this paddock → Set growth start date. Review the date and confirm. The current cycle has not changed.",
             title="Confirm paddock growth cycle",notification_id=f"pasture_reset_{self.entry.entry_id}_{pid}")
         await self.async_refresh()
 
-    async def async_start_cycle(self,pid,start,expected_cycle,confirmed=False):
+    async def async_start_cycle(self,pid,start,expected_cycle,confirmed=False,backfill=False):
+        if backfill:
+            now = datetime.now(timezone.utc).astimezone(ZoneInfo(self.config["timezone"]))
+            # Validate before network access or any change to the active cycle.
+            start_cycle(deepcopy(self.store.data["paddocks"][pid]),start,now,self.config["timezone"],
+                        confirmed=confirmed,expected_cycle=expected_cycle)
+            if start < now.date():
+                await self.async_backfill(start,now.date()-timedelta(days=1))
         async with self._operation_lock:
             now = datetime.now(timezone.utc).astimezone(ZoneInfo(self.config["timezone"]))
             start_cycle(self.store.data["paddocks"][pid],start,now,self.config["timezone"],confirmed=confirmed,expected_cycle=expected_cycle)
             self.store.data["paddocks"][pid]["cycle"]["location"] = {k:self.config[k] for k in ("latitude","longitude","elevation")}
             await self.store.save()
-        await self.async_refresh()
+        # Publish the new cycle's replay directly. A coordinator refresh can be
+        # debounced while the preceding backfill refresh is still in flight.
+        day = scheduled_day(datetime.now(timezone.utc),self.config["timezone"],self.config["calculation_time"])
+        await self.async_recalculate(day-timedelta(days=6),day)
 
     async def async_cancel_cycle_request(self,pid):
         async with self._operation_lock:
@@ -337,12 +403,15 @@ class PastureCoordinator(DataUpdateCoordinator):
             await self.store.save()
         await self.async_refresh()
 
-    async def async_add_paddock(self,name):
+    async def async_add_paddock(self,name,start=None):
         async with self._operation_lock:
             if not name.strip() or name.strip() in {p["settings"]["name"] for p in self.store.data["paddocks"].values()}:
                 raise ValueError("Distinct paddock name required")
             today = datetime.now(timezone.utc).astimezone(ZoneInfo(self.config["timezone"])).date()
-            new = paddocks_from_names(name,today)
+            start = start or today
+            if start > today or (today-start).days > MAX_HISTORY_DAYS:
+                raise ValueError("Select a growth start within the past year")
+            new = paddocks_from_names(name,start)
             if len(new)!=1:
                 raise ValueError("One name required")
             initialize_paddocks(self.store.data,new,self.config["timezone"],{k:self.config[k] for k in ("latitude","longitude","elevation")})

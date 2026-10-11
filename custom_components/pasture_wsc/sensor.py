@@ -109,6 +109,8 @@ class PaddockSensor(PaddockEntity,SensorEntity):
     def __init__(self,coordinator,pid,description):
         super().__init__(coordinator,pid,description.key)
         self.entity_description = description
+        if description.key in ("experimental_wsc","scenario_wsc"):
+            self._attr_suggested_display_precision = 1
 
     @property
     def native_value(self):
@@ -155,4 +157,10 @@ class PaddockSensor(PaddockEntity,SensorEntity):
             "moisture_mode":self.settings["moisture_mode"],"soil_coverage":p.get("soil",{}).get("coverage"),
             "gdd_base_c":self.settings["gdd_base"],"gdd_is_not_spechr":True,
             "weather_quality":p.get("weather_quality",[]),"source_data_hash":p.get("input_hash"),
-            "scenario_warnings":p.get("scenario",{}).get("warnings",[])[:20]}
+            "scenario_warnings":p.get("scenario",{}).get("warnings",[])[:20],
+            "calculated_cycle_start":p.get("calculated_cycle_start"),
+            "scenario_days":p.get("scenario_days"),
+            "scenario_valid_development_days":p.get("scenario_valid_development_days"),
+            "scenario_missing_development_days":p.get("scenario_missing_development_days",[]),
+            "scenario_history_gap":p.get("scenario_history_gap"),
+            "scenario_source_data_hash":p.get("scenario_input_hash")}

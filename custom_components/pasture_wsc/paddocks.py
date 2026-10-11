@@ -16,11 +16,12 @@ PRESET = "vigor_regrowth_n40_spec_response"
 DEFAULT_PADDOCK = {"enabled":True,"preset":PRESET,"notes":"","moisture_kind":"unknown",
     "moisture_entity":"","moisture_semantics":"Unknown; no soil conversion",
     "moisture_freshness":3600,"index_compatible":False,"moisture_mode":"unset",
-    "moisture_justification":"","scenario_enabled":False,"assumed_wi":.47,"gdd_base":5.0}
+    "scenario_enabled":False,"assumed_wi":.47,"gdd_base":5.0}
 
 
 def validate_paddock(value):
     p = {**deepcopy(DEFAULT_PADDOCK),**deepcopy(value)}
+    p.pop("moisture_justification",None)
     if not p.get("id") or not p.get("name","").strip() or len(p["name"]) > 100:
         raise ValueError("Paddock ID and name required")
     date.fromisoformat(p["start_date"])
@@ -37,8 +38,8 @@ def validate_paddock(value):
         p[key] = v
     if len(p["notes"]) > 255 or not p["moisture_semantics"].strip():
         raise ValueError("Notes limited to 255 characters; soil semantics required")
-    if p["moisture_kind"] == "calibrated_index" and (not p["index_compatible"] or not p["moisture_justification"].strip()):
-        raise ValueError("Compatible index attestation and scientific justification required")
+    if p["moisture_kind"] == "calibrated_index" and not p["index_compatible"]:
+        raise ValueError("Compatible index attestation required")
     return p
 
 
@@ -142,7 +143,7 @@ def calculate_paddock(state,end,weather,soil_observations,config):
         r_strict = all(i["quality"] in ("observed","provider") for i in w.get("solar_energy",{}).get("intervals",[]))
         soil = moisture_day(day,cycle["timezone"],p["id"],soil_observations,config["minimum_coverage"])
         soil_days[day] = soil
-        known = p["moisture_kind"] == "calibrated_index" and p["index_compatible"] and bool(p["moisture_justification"].strip()) and soil["value"] is not None
+        known = p["moisture_kind"] == "calibrated_index" and p["index_compatible"] and soil["value"] is not None
         index = SoilIndex(soil["value"],p["moisture_semantics"],True) if known else None
         hashes = (record.get("hash","missing_weather"),soil["hash"])
         primary[day] = DailyInput(record.get("daylength"),temperature if t_strict else None,
@@ -162,7 +163,14 @@ def calculate_paddock(state,end,weather,soil_observations,config):
     results = replay(start,end,primary,mode)
     scenarios = replay(start,end,scenario,mode,scenario=True) if p["scenario_enabled"] else ()
     rows,last_complete = [],None
+    scenario_valid_days = 0
+    scenario_missing_days = []
     for n,r in enumerate(results):
+        if scenarios:
+            if scenarios[n].components.development is None:
+                scenario_missing_days.append(r.day.isoformat())
+            else:
+                scenario_valid_days += 1
         observed_day = weather.get(r.day,{})
         effects = calculate(observed_day.get("daylength"),observed_day.get("weather",{}).get("temperature",{}).get("value"),
                             observed_day.get("weather",{}).get("solar_energy",{}).get("value"))
@@ -170,6 +178,10 @@ def calculate_paddock(state,end,weather,soil_observations,config):
             "primary":{**asdict(r.components),"spechr":r.spechr},
             "scenario":{**asdict(scenarios[n].components),"spechr":scenarios[n].spechr} if scenarios else {},
             "gdd":gdds[r.day],"scenario_gdd":scenario_gdds[r.day] if scenarios else None,
+            "calculated_cycle_start":start.isoformat(),"scenario_days":n+1 if scenarios else 0,
+            "scenario_valid_development_days":scenario_valid_days,
+            "scenario_missing_development_days":scenario_missing_days[:31].copy(),
+            "scenario_history_gap":scenarios[n].incomplete_history if scenarios else None,
             "history_gap":r.incomplete_history,"soil":soil_days[r.day],
             "weather_effects":{"radiation_effect":effects.radiation_effect,"temperature_effect":effects.temperature_effect},
             "weather_quality":sorted({i["quality"] for key in ("temperature","solar_energy") for i in observed_day.get("weather",{}).get(key,{}).get("intervals",[])}),

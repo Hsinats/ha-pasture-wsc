@@ -1,8 +1,9 @@
 """UI configuration, options and location reconfiguration."""
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import logging
 
 try:
     import probatio as vol
@@ -16,6 +17,8 @@ from homeassistant.helpers import selector
 from .const import DEFAULTS, DOMAIN
 from .settings import paddocks_from_names, settings, validate, validate_source
 from .paddocks import DEFAULT_PADDOCK, validate_paddock
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def location_schema(values):
@@ -33,7 +36,7 @@ def policy_schema(values):
         vol.Required("calculation_time",default=values["calculation_time"]): selector.TimeSelector(),
         vol.Required("minimum_coverage",default=values["minimum_coverage"]): selector.NumberSelector(selector.NumberSelectorConfig(min=.01,max=1,step=.01,mode="box")),
         vol.Required("solar_minimum_coverage",default=values["solar_minimum_coverage"]): selector.NumberSelector(selector.NumberSelectorConfig(min=.01,max=1,step=.01,mode="box")),
-        **{vol.Required(k,default=values[k]): selector.BooleanSelector() for k in ("allow_estimated","allow_forecast","estimate_solar","assume_clear_sky")},
+        **{vol.Required(k,default=values[k]): selector.BooleanSelector() for k in ("allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky")},
         vol.Optional("soil_entity"): selector.EntitySelector(selector.EntitySelectorConfig(filter={"domain":"sensor"})),
         vol.Required("soil_semantics",default=values["soil_semantics"]): selector.TextSelector(),
         vol.Required("soil_freshness",default=values["soil_freshness"]): selector.NumberSelector(selector.NumberSelectorConfig(min=60,max=86400,mode="box")),
@@ -133,13 +136,17 @@ class PastureWSCConfigFlow(SourceSteps, ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 today = datetime.now(ZoneInfo(self._values["timezone"])).date()
-                self._values["paddocks"] = paddocks_from_names(user_input["names"],today)
+                start = date.fromisoformat(user_input.get("start_date",today.isoformat()))
+                if start > today or (today-start).days > 366:
+                    raise ValueError("Select a start date within the past year")
+                self._values["paddocks"] = paddocks_from_names(user_input["names"],start)
             except ValueError:
                 errors["base"] = "invalid_paddocks"
             else:
                 return await self.async_step_sources()
         return self.async_show_form(step_id="paddocks",errors=errors,data_schema=vol.Schema({
-            vol.Required("names",default="Summer\nWinter\nBack"):selector.TextSelector(selector.TextSelectorConfig(multiline=True))}))
+            vol.Required("names",default="Summer\nWinter\nBack"):selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+            vol.Required("start_date",default=datetime.now(ZoneInfo(self._values["timezone"])).date().isoformat()):selector.DateSelector()}))
 
     async def async_step_finish(self,user_input=None):
         return self.async_create_entry(title="Pasture WSC",data=validate(self._values))
@@ -174,7 +181,31 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
             self._is_options = True
         if user_input is not None:
             return await self.async_step_weather_settings(user_input)
-        return self.async_show_menu(step_id="init",menu_options=["manage_paddocks","add_paddock","weather_settings","sources","finish"])
+        return self.async_show_menu(step_id="init",menu_options=["manage_paddocks","add_paddock","backfill","weather_settings","sources","finish"])
+
+    async def async_step_backfill(self,user_input=None):
+        coordinator = self._coordinator()
+        today = datetime.now(ZoneInfo(self._values["timezone"])).date()
+        starts = [p["cycle"]["start_date"] for p in coordinator.store.data["paddocks"].values()]
+        yesterday = today-timedelta(days=1)
+        default_start = max(min(starts,default=yesterday.isoformat()),(today-timedelta(days=366)).isoformat())
+        errors = {}
+        error_detail = ""
+        if user_input is not None:
+            try:
+                await coordinator.async_backfill(date.fromisoformat(user_input["start_date"]),
+                    date.fromisoformat(user_input["end_date"]))
+            except ValueError as error:
+                error_detail = str(error)
+                _LOGGER.exception("Pasture WSC manual weather backfill failed: %s",error)
+                errors["base"] = "backfill_failed"
+            else:
+                self._values["historical_backfill"] = True
+                return await self.async_step_init()
+        return self.async_show_form(step_id="backfill",errors=errors,
+            description_placeholders={"error_detail":error_detail},data_schema=vol.Schema({
+            vol.Required("start_date",default=(user_input or {}).get("start_date",min(default_start,yesterday.isoformat()))):selector.DateSelector(),
+            vol.Required("end_date",default=(user_input or {}).get("end_date",yesterday.isoformat())):selector.DateSelector()}))
 
     async def async_step_weather_settings(self,user_input=None):
         if user_input is not None:
@@ -213,7 +244,8 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
         errors = {}
         if user_input is not None:
             try:
-                await coordinator.async_update_paddock(self._paddock_id,{"moisture_entity":"",**user_input})
+                await coordinator.async_update_paddock(self._paddock_id,
+                    {"moisture_entity":"","notes":"",**user_input})
             except ValueError:
                 errors["base"] = "invalid_paddock_settings"
             else:
@@ -221,14 +253,17 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
         schema = vol.Schema({
             vol.Required("name",default=p["name"]):selector.TextSelector(),
             vol.Required("enabled",default=p["enabled"]):selector.BooleanSelector(),
-            vol.Required("notes",default=p["notes"]):selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+            vol.Optional("notes",default=p["notes"]):selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
             vol.Required("moisture_kind",default=p["moisture_kind"]):selector.SelectSelector(selector.SelectSelectorConfig(options=["unknown","shared_diagnostic","diagnostic_sensor","calibrated_index"])),
             vol.Optional("moisture_entity"):selector.EntitySelector(selector.EntitySelectorConfig(filter={"domain":"sensor"})),
             vol.Required("moisture_semantics",default=p["moisture_semantics"]):selector.TextSelector(),
             vol.Required("moisture_freshness",default=p["moisture_freshness"]):selector.NumberSelector(selector.NumberSelectorConfig(min=60,max=86400,mode="box")),
             vol.Required("index_compatible",default=p["index_compatible"]):selector.BooleanSelector(),
-            vol.Required("moisture_mode",default=p["moisture_mode"]):selector.SelectSelector(selector.SelectSelectorConfig(options=["unset","wi_over_reference_minus_one","one_minus_wi_over_reference"])),
-            vol.Required("moisture_justification",default=p["moisture_justification"]):selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+            vol.Required("moisture_mode",default=p["moisture_mode"]):selector.SelectSelector(selector.SelectSelectorConfig(options=[
+                {"value":"unset","label":"Not selected — WSC cannot be calculated"},
+                {"value":"wi_over_reference_minus_one","label":"Higher moisture index increases the WSC estimate"},
+                {"value":"one_minus_wi_over_reference","label":"Higher moisture index decreases the WSC estimate"},
+            ])),
             vol.Required("scenario_enabled",default=p["scenario_enabled"]):selector.BooleanSelector(),
             vol.Required("assumed_wi",default=p["assumed_wi"]):selector.NumberSelector(selector.NumberSelectorConfig(min=0,max=1,step=.01,mode="box")),
             vol.Required("gdd_base",default=p["gdd_base"]):selector.NumberSelector(selector.NumberSelectorConfig(min=-10,max=20,mode="box")),
@@ -243,15 +278,17 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
         if user_input is not None:
             try:
                 await coordinator.async_start_cycle(self._paddock_id,date.fromisoformat(user_input["start_date"]),
-                    self._cycle_id,confirmed=user_input["confirm"])
+                    self._cycle_id,confirmed=user_input["confirm"],backfill=user_input.get("backfill",False))
             except (ValueError,KeyError):
                 errors["base"] = "cycle_confirmation_required"
             else:
+                self._values["historical_backfill"] = coordinator.config.get("historical_backfill",False)
                 self._cycle_id = p["cycle"]["id"]
                 return await self.async_step_paddock_menu()
         return self.async_show_form(step_id="confirm_cycle",errors=errors,
             description_placeholders={"paddock":p["settings"]["name"],"previous_start":p["cycle"]["start_date"]},
             data_schema=vol.Schema({vol.Required("start_date",default=today.isoformat()):selector.DateSelector(),
+                                   vol.Required("backfill",default=True):selector.BooleanSelector(),
                                    vol.Required("confirm",default=False):selector.BooleanSelector()}))
 
     async def async_step_cancel_cycle_request(self,user_input=None):
@@ -262,12 +299,16 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
         errors = {}
         if user_input is not None:
             try:
-                await self._coordinator().async_add_paddock(user_input["name"])
+                today = datetime.now(ZoneInfo(self._values["timezone"])).date()
+                await self._coordinator().async_add_paddock(user_input["name"],
+                    date.fromisoformat(user_input.get("start_date",today.isoformat())))
             except ValueError:
                 errors["base"] = "invalid_paddocks"
             else:
                 return await self.async_step_manage_paddocks()
-        return self.async_show_form(step_id="add_paddock",errors=errors,data_schema=vol.Schema({vol.Required("name"):selector.TextSelector()}))
+        return self.async_show_form(step_id="add_paddock",errors=errors,data_schema=vol.Schema({
+            vol.Required("name"):selector.TextSelector(),
+            vol.Required("start_date",default=datetime.now(ZoneInfo(self._values["timezone"])).date().isoformat()):selector.DateSelector()}))
 
     async def async_step_finish(self,user_input=None):
         # Paddocks are never rewritten by source/policy changes.

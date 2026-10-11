@@ -18,14 +18,15 @@ class PastureStore:
         self.lock = asyncio.Lock()
         self.data = {"schema":STORE_VERSION,"started_at":datetime.now(timezone.utc).isoformat(),
                      "observations":[],"forecasts":{},"daily":{},"paddock_archive":{},"settings_revisions":[],
-                     "collector_issues":{},"soil":None,"paddocks":{},"paddock_results":{},"soil_observations":[]}
+                     "collector_issues":{},"soil":None,"paddocks":{},"paddock_results":{},"soil_observations":[],
+                     "historical_weather":{}}
 
     async def load(self):
         self.loaded = False
         stored = await self.backend.async_load()
         if stored is not None:
             if stored.get("schema") == STORE_VERSION:
-                for key in ("paddocks","paddock_results","soil_observations"):
+                for key in ("paddocks","paddock_results","soil_observations","historical_weather"):
                     stored.setdefault(key,deepcopy(self.data[key]))
             if stored.get("schema") != STORE_VERSION or any(key not in stored for key in self.data):
                 raise ValueError("Unsupported or incomplete Pasture WSC storage; preserve file and restore backup")

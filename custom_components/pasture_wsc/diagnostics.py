@@ -16,6 +16,8 @@ async def async_get_config_entry_diagnostics(hass,entry):
         "archived_cycle_count":sum(len(p["archives"]) for p in coordinator.store.data.get("paddocks",{}).values()),
         "observation_count":len(coordinator.store.data["observations"]),
         "stored_day_count":len(coordinator.store.data["daily"]),
+        "historical_interval_count":len(coordinator.store.data.get("historical_weather",{})),
+        "historical_backfill_enabled":coordinator.config.get("historical_backfill",False),
         "stored_version_count":sum(len(v) for v in coordinator.store.data["daily"].values()),
         "collector_issue_types":sorted(set(data.get("collector_issues",{}).values())),
         "weather":{k:{"coverage":v["coverage"],"fallback_proportion":v["fallback_proportion"],

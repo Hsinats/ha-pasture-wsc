@@ -8,12 +8,12 @@ Generic soil moisture is not a calibrated FONSCH water index. Primary and explic
 
 1. Copy the entire `custom_components/pasture_wsc` folder into your HA configuration
    directory under `custom_components/`. The bundled engine is included; no separate
-   package is needed. Or extract `dist/pasture_wsc-0.3.0.zip` into that directory.
+   package is needed. Or extract `dist/pasture_wsc-0.4.7.zip` into that directory.
 2. Restart HA. Select **Settings → Devices & services → Add integration → Pasture WSC**.
 3. Accept/override HA location and timezone. Choose optional weather providers,
    daily calculation time, completeness thresholds and explicit fallback policies.
-4. Enter paddock names, one per line. Summer, Winter and Back are editable examples;
-   each creates a device with independent results and controls.
+4. Enter paddock names and the approximate cut/grazing start date. The initial date
+   applies to all paddocks; each can be changed independently afterward.
 5. Add any source mappings and choose **Save configuration**. No YAML is required.
 
 Uses recent HA APIs: runtime_data, OptionsFlowWithReload, state reporting and forecast
@@ -172,21 +172,57 @@ is enabled. It never supplies the primary model.
 Open **Configure → Manage paddocks → select paddock → Paddock settings** to choose
 moisture semantics and an explicit moisture response. Defaults leave moisture unknown
 and scenarios off. A percent soil sensor remains diagnostic; calibrated primary input
-requires a justified FONSCH-compatible dimensionless index on 0–1, not a VWC conversion.
+requires an attested FONSCH-compatible dimensionless index on 0–1, not a VWC conversion.
 For an exploratory scenario, enable it and choose an explicit moisture expression.
 Assumed wi applies throughout that scenario's current cycle; changing it replays the
 cycle and retains previous result versions. Estimated weather stays labeled as such.
 
-The request button opens a persistent notification. To actually reset, use **Start new
-growth cycle** in paddock configuration, review its date and explicitly confirm.
+The request button opens a persistent notification. To actually reset, use **Set growth
+start date** in paddock configuration, review its date and explicitly confirm.
 Only that paddock changes; old cycles and results remain archived. Repeated requests
 with an old cycle ID are rejected. Settings apply immediately; choose **Save
 configuration** afterward to reload changed sensor subscriptions or new paddock entities.
 Disabling a paddock keeps its history, and reenabling replays retained weather.
 
-Collection cannot reconstruct the hours before installation. An incomplete first day
-can block cumulative development until backfilled or a new cycle starts on a fully
-collected day. A weather change alone does not resolve missing historical coverage.
+### Weather backfill and selecting the growth start
+
+Open **Configure → Backfill weather** to retrieve 1–366 completed local dates, including
+the partial installation day. This also enables automatic backfill for later gaps.
+Alternatively, enable **Fill missing past weather from local Home Assistant history** in weather settings.
+On startup and hourly retries, enabled backfill checks active cycles (up to 366 days
+through the scheduled completed date), imports missing temperature/radiation coverage,
+and replays all fetched dates. Complete retained coverage needs no network request.
+Older cycles may require separate manual date ranges. Today is calculated after its
+scheduled completion time, not as a partial day.
+
+To choose a cut/grazing date for an existing paddock, open **Configure → Manage paddocks
+→ select paddock → Set growth start date**. Enter your best approximate date and leave
+**Backfill weather from this date** selected to import earlier weather. A failed
+import leaves the current cycle active. Previous cycles stay archived. Setup and
+adding a paddock also provide a date picker; per-paddock dates can differ.
+
+Backfill reads the configured weather entities and sensor mappings from Home Assistant's
+local recorder database. It makes no external requests. Attribute-only weather changes
+are included, so retained temperature, cloud cover and humidity can be recovered even
+when the weather condition text did not change. Existing live observations take priority.
+Recorded sensor units, timestamps, unknown/unavailable periods and configured freshness
+limits are respected. UTC intervals preserve local DST boundaries. Recorder queries run
+on its database executor, including materialization of historical attributes.
+
+When no irradiance/energy sensor was recorded, enable the existing astronomy/cloud solar
+estimate in weather settings to derive radiation from recorded cloud cover. Backfill does
+not automatically enable a clear-sky assumption or change model coefficients. Weather
+provider proxies stay estimated; verified sensor mappings keep their existing quality.
+Historical mapping semantics come from the current configured mappings, so only import
+periods for which those semantics/calibrations apply.
+
+Only retained recorder history can be recovered. Excluded entities, purged dates, and
+readings never recorded remain missing. Backfill does not retrieve past forecasts from
+weather services or contact Open-Meteo. The separate existing forecast opt-in is unchanged.
+Imported intervals and prior daily versions persist across restarts. Changing location
+will not reuse imported intervals from another configured location. Diagnostics include
+the imported interval count and local-history errors.
+
 GDD uses a configurable base (default 5 °C) and is diagnostic, independent of SPECHR.
 Cycles retain their original location and timezone; start a new confirmed cycle to adopt
 a reconfigured location. See [ADR 003](docs/ADR-003-paddocks.md).

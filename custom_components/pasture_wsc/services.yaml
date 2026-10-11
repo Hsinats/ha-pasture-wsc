@@ -18,6 +18,23 @@ recalculate:
       required: true
       selector:
         date:
+backfill_weather:
+  name: Backfill completed weather days
+  description: Import configured weather entities and sensors from local Home Assistant recorder for 1–366 completed dates. No external requests. Retained live readings take priority. Enables automatic local backfill for later gaps.
+  fields:
+    entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: pasture_wsc
+    start_date:
+      required: true
+      selector:
+        date:
+    end_date:
+      required: true
+      selector:
+        date:
 start_new_growth_cycle:
   name: Confirm a new paddock growth cycle
   description: Archives the selected cycle. Requires explicit confirmation and the current cycle ID; repeated requests with the old ID are rejected. Prefer the paddock confirmation UI.
@@ -41,6 +58,11 @@ start_new_growth_cycle:
         text:
     confirmed:
       required: true
+      default: false
+      selector:
+        boolean:
+    backfill:
+      name: Backfill weather from the selected start date
       default: false
       selector:
         boolean:

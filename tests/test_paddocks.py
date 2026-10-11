@@ -33,7 +33,7 @@ def soils(days=2,value=.4,unit="1"):
 
 def calibrated(**extra):
     return state(moisture_kind="calibrated_index",moisture_entity="sensor.wi",index_compatible=True,
-        moisture_mode="one_minus_wi_over_reference",moisture_justification="External documented balance and Eq10b rationale",**extra)
+        moisture_mode="one_minus_wi_over_reference",**extra)
 
 
 def test_old_paddocks_initialize_once_without_losing_ids():

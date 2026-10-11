@@ -22,10 +22,10 @@ async def test_flow_creates_three_paddocks(hass):
     result = await hass.config_entries.flow.async_configure(result["flow_id"],{k:entry_data()[k] for k in ("latitude","longitude","elevation","timezone")})
     assert result["step_id"] == "weather"
     policy = {k:entry_data()[k] for k in ("weather_entities","calculation_time","minimum_coverage","solar_minimum_coverage",
-                                        "allow_estimated","allow_forecast","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
+                                        "allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
     result = await hass.config_entries.flow.async_configure(result["flow_id"],policy)
     assert result["step_id"] == "paddocks"
-    result = await hass.config_entries.flow.async_configure(result["flow_id"],{"names":"Summer\nWinter\nBack"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"],{"names":"Summer\nWinter\nBack","start_date":date.today().isoformat()})
     assert result["type"] == FlowResultType.MENU
     result = await hass.config_entries.flow.async_configure(result["flow_id"],{"next_step_id":"finish"})
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -64,7 +64,7 @@ async def test_options_and_reconfigure_preserve_paddocks(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(result["flow_id"],{"next_step_id":"weather_settings"})
     policy = {k:entry_data()[k] for k in ("weather_entities","calculation_time","minimum_coverage","solar_minimum_coverage",
-                                        "allow_estimated","allow_forecast","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
+                                        "allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
     result = await hass.config_entries.options.async_configure(result["flow_id"],{**policy,"allow_estimated":True})
     result = await hass.config_entries.options.async_configure(result["flow_id"],{"next_step_id":"finish"})
     assert result["type"] == FlowResultType.CREATE_ENTRY

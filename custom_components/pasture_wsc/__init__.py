@@ -32,19 +32,33 @@ async def async_setup(hass,config):
     hass.services.async_register(DOMAIN,"recalculate",recalculate,schema=vol.Schema({
         vol.Required("entry_id"):str,vol.Required("start_date"):str,vol.Required("end_date"):str}))
 
+    async def backfill(call):
+        entry = hass.config_entries.async_get_entry(call.data["entry_id"])
+        if entry is None or entry.domain!=DOMAIN or not getattr(entry,"runtime_data",None):
+            raise HomeAssistantError("Pasture WSC entry is not loaded")
+        try:
+            await entry.runtime_data.async_backfill(date.fromisoformat(call.data["start_date"]),
+                date.fromisoformat(call.data["end_date"]))
+        except ValueError as error:
+            raise HomeAssistantError(str(error)) from error
+
+    hass.services.async_register(DOMAIN,"backfill_weather",backfill,schema=vol.Schema({
+        vol.Required("entry_id"):str,vol.Required("start_date"):str,vol.Required("end_date"):str}))
+
     async def new_cycle(call):
         entry = hass.config_entries.async_get_entry(call.data["entry_id"])
         if entry is None or entry.domain!=DOMAIN or not getattr(entry,"runtime_data",None):
             raise HomeAssistantError("Pasture WSC entry is not loaded")
         try:
             await entry.runtime_data.async_start_cycle(call.data["paddock_id"],date.fromisoformat(call.data["start_date"]),
-                call.data["expected_cycle_id"],confirmed=call.data["confirmed"])
+                call.data["expected_cycle_id"],confirmed=call.data["confirmed"],backfill=call.data.get("backfill",False))
         except (ValueError,KeyError) as error:
             raise HomeAssistantError("Confirm a valid current paddock cycle and start date") from error
 
     hass.services.async_register(DOMAIN,"start_new_growth_cycle",new_cycle,schema=vol.Schema({
         vol.Required("entry_id"):str,vol.Required("paddock_id"):str,vol.Required("start_date"):str,
-        vol.Required("expected_cycle_id"):str,vol.Required("confirmed",default=False):bool}))
+        vol.Required("expected_cycle_id"):str,vol.Required("confirmed",default=False):bool,
+        vol.Optional("backfill",default=False):bool}))
     return True
 
 

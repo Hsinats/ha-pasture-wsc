@@ -14,7 +14,7 @@
       },
       "weather": {
         "title": "Weather and completeness policies",
-        "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only.",
+        "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only. Historical backfill reads the configured weather entities and sensors from Home Assistant recorder. It makes no external requests. Cloud history can support the enabled solar estimate.",
         "data": {
           "weather_entities": "Weather providers",
           "calculation_time": "Daily calculation time (configured local time)",
@@ -26,14 +26,16 @@
           "assume_clear_sky": "Explicitly assume clear sky for missing daylight cloud coverage",
           "soil_entity": "Optional soil sensor (diagnostic only)",
           "soil_semantics": "Soil measurement meaning/calibration notes",
-          "soil_freshness": "Soil freshness (seconds)"
+          "soil_freshness": "Soil freshness (seconds)",
+          "historical_backfill": "Fill missing past weather from local Home Assistant history"
         }
       },
       "paddocks": {
         "title": "Reserve paddock identities",
-        "description": "Create independently managed paddocks. Each gets a device, results and controls. Initial dates are pragmatic growth-cycle placeholders.",
+        "description": "Choose an approximate cut or grazing date within the past year. It initially applies to all paddocks; each date can be changed later. Enable historical backfill in weather settings to retrieve weather before installation.",
         "data": {
-          "names": "Paddock names (one per line)"
+          "names": "Paddock names (one per line)",
+          "start_date": "Growth start date (approximate cut or grazing date)"
         }
       },
       "sources": {
@@ -86,9 +88,10 @@
     "error": {
       "invalid_settings": "Check location, timezone, units and policy values.",
       "invalid_source": "Check source entity domain, variable, semantics, units and counter settings.",
-      "invalid_paddocks": "Enter distinct, non-empty paddock names, one per line.",
-      "invalid_paddock_settings": "Check paddock name, index compatibility, justification and numeric settings.",
-      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed."
+      "invalid_paddocks": "Enter distinct, non-empty paddock names and a growth start date within the past year, no later than today.",
+      "invalid_paddock_settings": "Check paddock name, index compatibility and numeric settings.",
+      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed. If backfill is selected, choose within the past year and ensure recorder contains usable weather history.",
+      "backfill_failed": "Local weather history could not be imported. See the reason above or the Home Assistant logs."
     },
     "abort": {
       "reconfigure_successful": "Location updated; historical records preserved."
@@ -140,12 +143,21 @@
           "add_paddock": "Add paddock",
           "weather_settings": "Weather settings",
           "sources": "Source mappings",
-          "finish": "Save configuration"
+          "finish": "Save configuration",
+          "backfill": "Backfill weather"
+        }
+      },
+      "backfill": {
+        "title": "Backfill weather",
+        "description": "Read the configured weather entities and sensors from Home Assistant's local recorder for 1–366 completed days. No external requests are made. Only retained history can be recovered. Enable the solar estimate in weather settings to use recorded cloud cover when radiation was not measured. This also enables automatic local backfill for later gaps.\n\n{error_detail}",
+        "data": {
+          "start_date": "First date",
+          "end_date": "Last completed date"
         }
       },
       "weather_settings": {
         "title": "Weather and completeness policies",
-        "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only.",
+        "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only. Historical backfill reads the configured weather entities and sensors from Home Assistant recorder. It makes no external requests. Cloud history can support the enabled solar estimate.",
         "data": {
           "weather_entities": "Weather providers",
           "calculation_time": "Daily calculation time (configured local time)",
@@ -157,7 +169,8 @@
           "assume_clear_sky": "Explicitly assume clear sky for missing daylight cloud coverage",
           "soil_entity": "Optional soil sensor (diagnostic only)",
           "soil_semantics": "Soil measurement meaning/calibration notes",
-          "soil_freshness": "Soil freshness (seconds)"
+          "soil_freshness": "Soil freshness (seconds)",
+          "historical_backfill": "Fill missing past weather from local Home Assistant history"
         }
       },
       "manage_paddocks": {
@@ -168,32 +181,34 @@
       },
       "add_paddock": {
         "title": "Add paddock",
-        "description": "Save configuration afterward to load its entities.",
+        "description": "Choose the approximate cut or grazing date within the past year. Save configuration afterward to load its entities. Enable historical backfill in weather settings to retrieve earlier weather.",
         "data": {
-          "name": "Paddock name"
+          "name": "Paddock name",
+          "start_date": "Growth start date"
         }
       },
       "paddock_menu": {
         "title": "Paddock management",
         "menu_options": {
           "paddock_settings": "Paddock settings",
-          "confirm_cycle": "Start new growth cycle",
+          "confirm_cycle": "Set growth start date",
           "cancel_cycle_request": "Cancel cycle request",
           "manage_paddocks": "Select another paddock",
           "finish": "Save configuration"
         }
       },
       "confirm_cycle": {
-        "title": "Confirm new growth cycle",
-        "description": "Start a new cycle for {paddock}, replacing the active cycle starting {previous_start}. Previous cycles and results remain archived. Only this paddock is reset. Missing historical inputs remain missing.",
+        "title": "Set growth start date",
+        "description": "Choose the approximate cut or grazing date for {paddock}. The previous cycle starting {previous_start} remains archived. With backfill selected, local Home Assistant history is read before the cycle changes. Backfill supports up to 366 completed days. If no usable history is found, the current cycle remains active.",
         "data": {
-          "start_date": "New cycle start date",
-          "confirm": "Confirm starting a new cycle"
+          "start_date": "Growth start date",
+          "backfill": "Backfill weather from local Home Assistant history",
+          "confirm": "Confirm this growth start date"
         }
       },
       "paddock_settings": {
         "title": "Paddock settings",
-        "description": "Settings apply immediately. Save configuration afterward to reload source subscriptions. Generic soil moisture remains diagnostic. A calibrated index requires compatible dimensionless wi and justification. Assumed wi is used only in the explicitly enabled scenario, throughout its cycle.",
+        "description": "Settings apply immediately. Save configuration afterward to reload source subscriptions. Generic soil moisture remains diagnostic. A calibrated index requires compatible dimensionless wi. Assumed wi is used only in the explicitly enabled scenario, throughout its cycle.",
         "data": {
           "name": "Paddock name",
           "enabled": "Enable paddock",
@@ -203,8 +218,7 @@
           "moisture_semantics": "Measurement meaning and calibration",
           "moisture_freshness": "Maximum index freshness (seconds)",
           "index_compatible": "Attest FONSCH-compatible dimensionless index",
-          "moisture_mode": "Explicit moisture response expression",
-          "moisture_justification": "Scientific justification for index and response",
+          "moisture_mode": "How the moisture index affects the WSC estimate",
           "scenario_enabled": "Enable assumed/estimated scenario",
           "assumed_wi": "Scenario assumed wi (0–1)",
           "gdd_base": "Diagnostic GDD base temperature (°C)"
@@ -214,9 +228,10 @@
     "error": {
       "invalid_settings": "Check location, timezone, units and policy values.",
       "invalid_source": "Check source entity domain, variable, semantics, units and counter settings.",
-      "invalid_paddocks": "Enter distinct, non-empty paddock names, one per line.",
-      "invalid_paddock_settings": "Check paddock name, index compatibility, justification and numeric settings.",
-      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed."
+      "invalid_paddocks": "Enter distinct, non-empty paddock names and a growth start date within the past year, no later than today.",
+      "invalid_paddock_settings": "Check paddock name, index compatibility and numeric settings.",
+      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed. If backfill is selected, choose within the past year and ensure recorder contains usable weather history.",
+      "backfill_failed": "Local weather history could not be imported. See the reason above or the Home Assistant logs."
     },
     "abort": {
       "integration_not_loaded": "Load the integration before managing paddocks."
@@ -394,6 +409,24 @@
         },
         "confirmed": {
           "name": "Confirm new cycle"
+        },
+        "backfill": {
+          "name": "Backfill weather from the selected date"
+        }
+      }
+    },
+    "backfill_weather": {
+      "name": "Backfill completed weather days",
+      "description": "Import 1–366 completed days from local Home Assistant recorder and enable automatic local backfill. No external requests. Retained live readings take priority.",
+      "fields": {
+        "entry_id": {
+          "name": "Integration entry"
+        },
+        "start_date": {
+          "name": "First local date"
+        },
+        "end_date": {
+          "name": "Last local date"
         }
       }
     }
