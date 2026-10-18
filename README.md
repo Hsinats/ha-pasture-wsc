@@ -1,5 +1,16 @@
 # Pasture WSC — engine and Home Assistant integration
 
+Setup combines measured sensors, weather forecasts and fallbacks on one
+**Inputs & fallbacks** page. Skip physical sensors if using a weather provider.
+Only selecting **Review advanced settings** opens an additional page for timing,
+coverage thresholds and (when a soil sensor is selected) soil reading freshness;
+measurement notes are internal and require no user input. A rain gauge's counter type must
+match its cumulative or daily-reset behaviour. Advanced source mappings remain
+available for accumulated solar energy, calibration, priorities and freshness.
+Existing inputs and policies are preserved on upgrade; the new flow does not
+turn fallbacks on or off automatically. Clear-sky fallback remains off for new
+setups. Existing users can review it under Data gaps & fallbacks.
+
 Experimental pasture water-soluble carbohydrate engine with Home Assistant weather collection and Phase 3
 paddock devices, model results and management controls. **No horse grazing safety decision is provided.**
 Generic soil moisture is not a calibrated FONSCH water index. Primary and explicitly assumed scenario results are separate.
@@ -165,23 +176,102 @@ the shared Pasture WSC weather device.
 
 Each paddock has experimental WSC and daily change, cumulative SPECHR, diagnostic GDD,
 separate scenario results, component contributions, statuses, cycle dates and IDs.
-Controls include enable/disable, scenario opt-in, scenario assumed wi, management notes
-and a new-cycle request button. The assumed-wi control is available when its scenario
-is enabled. It never supplies the primary model.
+Rain accumulation (since last cut) sums available daily rainfall in mm through the
+latest completed day, including allowed forecast estimates. Attributes report
+days with data, missing days and completeness. The total starts at 0 mm even
+before rain data arrives; missing days remain excluded and marked incomplete.
+Zero with no data does not mean confirmed dry weather. Changing Last cut resets the range;
+backfills and corrections replay the total.
+Separate Rain accumulation (measured) and Rain accumulation (estimated) sensors
+include today through the current time, starting at Last cut. Measured totals
+use observed/provider intervals; estimated totals use estimated/forecast inputs
+independently, with no measured fallback or double counting overlapping sources.
+They update on source reports and every minute, with forecast retrieval remaining
+hourly. The current hour's forecast amount is distributed uniformly across its
+elapsed portion, so the estimate can move each minute without claiming actual
+minute-by-minute rainfall. Missing intervals are excluded; coverage and missing
+hours are attributes. Both totals initialize at zero. The original combined daily
+sensor remains available and still ends at yesterday.
+Initial setup includes a default soil type dropdown: Unsure (default), Sandy,
+Loam or Clay. Each paddock has its own Soil type dropdown in its device's
+Configuration section and in Configure → Manage paddocks → Paddock settings.
+New paddocks inherit the onboarding default. Existing paddocks inherit the
+previous site setting once, preserving any subsequent per-paddock choices.
+Soil type controls the experimental daily
+rainfall/drying bucket estimate. Per-paddock Soil moisture (measured) and Soil
+moisture (estimated) sensors report dimensionless indices on 0–1, not VWC percent.
+Measured requires an attested compatible index with sufficient daily coverage.
+The estimated-inputs WSC route prefers that index, then the weather estimate,
+then the explicit initial/fallback moisture index when weather history is missing.
+The default WSC preference still selects the measured-inputs route first.
+
+The moisture estimate now uses FAO-56 daily Penman–Monteith reference ET and a
+single-coefficient root-zone water balance. The previous heuristic drying formula
+has been removed. See [FAO setup, assumptions and references](docs/fao56/README.md).
+Per-paddock settings include effective rooting depth (default 0.5 m), pasture Kc
+(0.85), and wind measurement height (10 m). Representative soil properties within
+FAO ranges replace the old fixed capacities. The initial moisture index (default
+0.47) seeds relative available water on Last cut. Missing wind uses a flagged
+temporary 2 m/s at 2 m; missing humidity uses a flagged Tmin/dewpoint approximation.
+The storage fraction remains an unvalidated proxy for the original WSC model wi.
+Snowmelt, irrigation and runoff are not simulated; days with Tmax ≤ 0 °C hold state.
+Missing rain, temperature or solar holds the previous moisture level (initially
+the configured initial/fallback index) without applying rainfall or drying.
+Tracking resumes on the next complete day. Missing rain remains null, not zero.
+The estimate exposes `status: held_assumption`, cumulative `assumed_days` and
+warnings; WSC exposes the method in its `selected_moisture_method` attribute.
+Hourly forecast precipitation amounts are archived when forecast use is enabled,
+converted from the provider's mm/in units, and summed over completed local days.
+Rain probability is never substituted for an amount. These forecasts cannot fill
+dates before collection started. Sensor attributes expose inputs, capacity,
+drying, drainage and warnings. Replay reconstructs estimates after restart;
+corrected weather, soil type or initial index recalculates the active cycle.
+Daily change is the final WSC minus the previous day's final WSC, in percentage
+points, using the configured preference and fallbacks independently for each day.
+It is unknown on the first day or when either day's WSC is missing. The separate
+scenario daily change compares scenario WSC values only.
+Controls include enable/disable, estimated-inputs opt-in, soil type and an editable
+Last cut date that starts the regrowth cycle. Initial moisture is internal: new
+paddocks start at 0.47; existing saved assumptions are preserved. Its numeric
+control is retired automatically on reload.
+
+Detailed factors, contributions, SPECHR/GDD, duplicate WSC route outputs and the
+legacy daily rain total are disabled by default for new entities. Main automatic
+WSC, daily change, WSC level, both moisture outputs and both live rain totals stay
+enabled. Existing entity enablement is preserved. Disable existing extras in Home
+Assistant's entity settings, or hide them if you want to retain their history.
+Calculations use coordinator data, not output entities: disabling outputs does not
+stop the model. Disabling stops state/history recording for that entity; hiding
+only changes presentation. Input weather/rain sensors must remain available.
+
+Main paddock diagnostics now follow WSC (auto): Calculation status, WSC method,
+Moisture method, Calculated through and Data gaps. A usable estimated result is
+shown as Ready with estimates even if the measured route is pending soil. The
+date is the current selected WSC result's date, not a historical measured success.
+Data gaps counts days with held moisture and missing development inputs; zero
+reported gaps does not validate assumed soil properties or the FAO/WSC proxy.
+Cycle ID, preset, measured history/status and separate estimated status are
+disabled by default for new entities. Existing registry settings are preserved;
+hide or disable existing technical entities manually if desired.
 
 Open **Configure → Manage paddocks → select paddock → Paddock settings** to choose
 moisture semantics and an explicit moisture response. Defaults leave moisture unknown
 and scenarios off. A percent soil sensor remains diagnostic; calibrated primary input
 requires an attested FONSCH-compatible dimensionless index on 0–1, not a VWC conversion.
 For an exploratory scenario, enable it and choose an explicit moisture expression.
-Assumed wi applies throughout that scenario's current cycle; changing it replays the
-cycle and retains previous result versions. Estimated weather stays labeled as such.
+Initial/fallback wi seeds that scenario's current cycle; gaps hold the previous
+moisture level. Changing settings replays the cycle and retains previous result
+versions. Estimated weather stays labeled as such.
 
-The request button opens a persistent notification. To actually reset, use **Set growth
-start date** in paddock configuration, review its date and explicitly confirm.
-Only that paddock changes; old cycles and results remain archived. Repeated requests
-with an old cycle ID are rejected. Settings apply immediately; choose **Save
-configuration** afterward to reload changed sensor subscriptions or new paddock entities.
+Change **Last cut** directly on the paddock device to choose its cut/grazing
+date. Saving a different date archives the active cycle and replays retained history;
+Alternatively, press **Mark paddock cut** in the paddock Configuration panel to
+set Last cut to today in the integration's configured timezone and start a new
+cycle. The previous cycle is archived. Repeat presses on that same date do
+nothing. New-cycle WSC waits for a completed day; rain accumulation starts at zero.
+saving the same date does nothing. Future dates and dates over 3660 days old are rejected.
+Only that paddock changes. Settings apply immediately; choose **Save configuration**
+after changing source subscriptions or adding paddocks to reload their entities.
 Disabling a paddock keeps its history, and reenabling replays retained weather.
 
 ### Weather backfill and selecting the growth start
@@ -195,11 +285,11 @@ and replays all fetched dates. Complete retained coverage needs no network reque
 Older cycles may require separate manual date ranges. Today is calculated after its
 scheduled completion time, not as a partial day.
 
-To choose a cut/grazing date for an existing paddock, open **Configure → Manage paddocks
-→ select paddock → Set growth start date**. Enter your best approximate date and leave
-**Backfill weather from this date** selected to import earlier weather. A failed
-import leaves the current cycle active. Previous cycles stay archived. Setup and
-adding a paddock also provide a date picker; per-paddock dates can differ.
+For an existing paddock, edit its **Growth cycle start** date entity directly; no
+configuration screen or request button is needed. Earlier weather uses retained history.
+Enable automatic local backfill or use the backfill weather configuration screen when
+additional recorder history is needed. Missing history remains marked incomplete.
+Setup and adding a paddock also provide a date picker; per-paddock dates can differ.
 
 Backfill reads the configured weather entities and sensor mappings from Home Assistant's
 local recorder database. It makes no external requests. Attribute-only weather changes
@@ -226,3 +316,51 @@ the imported interval count and local-history errors.
 GDD uses a configurable base (default 5 °C) and is diagnostic, independent of SPECHR.
 Cycles retain their original location and timezone; start a new confirmed cycle to adopt
 a reconfigured location. See [ADR 003](docs/ADR-003-paddocks.md).
+
+
+### Sensor presentation
+
+Completed model/weather day sensors (including the per-paddock completed day) are
+disabled by default for new entities. Their dates remain available on status/history
+sensor attributes, even with the date entities disabled: calculations read the shared
+coordinator and retained archive directly. Existing installations keep their entity
+registry choices; disable these date sensors manually to hide them. Disabling a
+configured external weather/soil source can still remove input data.
+
+Numeric sensors suggest one decimal place for weather, WSC, trends, effects, cumulative
+SPECHR and GDD, and three decimal places for fractions/model factors and daily development.
+Precision follows the quantity's scale, rather than changing when a value crosses 1.
+Calculations retain full precision, and Home Assistant's user-selected display precision
+continues to take priority.
+
+
+Each paddock has a numeric **Water-soluble carbohydrates** sensor for the default result, displayed to one decimal
+place. Set **Preferred carbohydrate estimate** on the paddock device to Primary model (the initial default)
+or Scenario model. The sensor uses that route when it has a finite result for the current model day,
+then falls back to the other available route. The scenario must be explicitly enabled;
+choosing it as the preference does not enable it. A disabled paddock or two missing
+results makes WSC unavailable. It never substitutes zero or an older day's result.
+
+WSC attributes identify the selected/preferred route, fallback, date, warnings and
+whether scenario assumptions apply. Both route-specific sensors remain available,
+and disabling those display entities does not affect WSC's choice. The preference is
+saved per paddock and survives reloads.
+
+
+### Plain-language carbohydrate level
+
+**Pasture carbohydrate level** uses the same preferred-route selection and fallback as
+**Water-soluble carbohydrates**, displaying Low below 10%, Medium from 10% to below
+20%, and High at 20% or above. Values are percentages of dry matter. Missing estimates
+make this sensor unavailable; they are never classified as Low. Classification uses
+full precision before display rounding. The percentage, route and cutoffs remain in
+its attributes. Edit both cutoffs under paddock settings; the lower must be positive
+and below the upper, and the upper cannot exceed 100%.
+
+These are application-defined descriptive bands, based on the 10–20% typical grass
+WSC range at harvest in [NC State Extension's forage conservation guide](https://content.ces.ncsu.edu/forage-conservation-techniques-silage-and-haylage-production).
+They are not a published universal three-level classification or grazing-safety limits.
+The commonly cited 10–12% guidance for susceptible horses concerns nonstructural
+carbohydrates (WSC plus starch), as explained by [University of Minnesota Extension](https://extension.umn.edu/agriculture/animals-and-livestock/horse/understanding-your-hay-analysis).
+This experimental model estimates WSC alone and does not measure starch or establish
+animal-specific safety.

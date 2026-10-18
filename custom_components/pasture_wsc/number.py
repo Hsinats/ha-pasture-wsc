@@ -5,7 +5,8 @@ from .entity import PaddockEntity
 
 
 async def async_setup_entry(hass,entry,async_add_entities):
-    async_add_entities(AssumedMoistureNumber(entry.runtime_data,pid) for pid in entry.runtime_data.store.data["paddocks"])
+    # Initial moisture remains an internal assumption; retire its numeric UI.
+    async_add_entities([])
 
 
 class AssumedMoistureNumber(PaddockEntity,NumberEntity):

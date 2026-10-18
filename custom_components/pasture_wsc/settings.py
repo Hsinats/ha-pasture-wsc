@@ -5,7 +5,7 @@ from math import isfinite
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .const import DEFAULTS, VARIABLES
+from .const import DEFAULTS, VARIABLES, SOIL_TYPES
 
 
 def settings(entry):
@@ -21,6 +21,8 @@ def finite(value, low, high):
 
 def validate(data):
     result = {**deepcopy(DEFAULTS), **deepcopy(data)}
+    if result["soil_type"] not in SOIL_TYPES:
+        raise ValueError("Unknown soil type")
     for key, low, high in (("latitude",-90,90),("longitude",-180,180),("elevation",-500,9000),
                           ("minimum_coverage",.01,1),("solar_minimum_coverage",.01,1),
                           ("soil_freshness",60,86400)):
@@ -57,7 +59,7 @@ def validate_source(source):
         raise ValueError("Unknown source kind")
     entity = source["entity_id"]
     if source["kind"].startswith("weather_"):
-        if not entity.startswith("weather.") or source["variable"] not in ("temperature","humidity","cloud_cover"):
+        if not entity.startswith("weather.") or source["variable"] not in ("temperature","humidity","cloud_cover","wind_speed"):
             raise ValueError("Unsupported weather attribute")
     elif not entity.startswith("sensor."):
         raise ValueError("Sensor required")

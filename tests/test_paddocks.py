@@ -46,6 +46,20 @@ def test_old_paddocks_initialize_once_without_losing_ids():
     assert data["paddocks"]["old"]["settings"]["scenario_enabled"] is False
 
 
+def test_soil_type_inherits_once_and_is_independent_per_paddock():
+    data = {}
+    configured = [{"id":pid,"name":pid,"start_date":DAY.isoformat()} for pid in ("a","b")]
+    initialize_paddocks(data,configured,"America/Toronto",soil_type="clay")
+    assert all(p["settings"]["soil_type"] == "clay" for p in data["paddocks"].values())
+    update_paddock(data["paddocks"]["a"],{"soil_type":"sandy"})
+    data["paddocks"]["b"]["settings"].pop("soil_type")
+    initialize_paddocks(data,configured,"America/Toronto",soil_type="loam")
+    assert data["paddocks"]["a"]["settings"]["soil_type"] == "sandy"
+    assert data["paddocks"]["b"]["settings"]["soil_type"] == "loam"
+    with pytest.raises(ValueError,match="Unknown soil type"):
+        update_paddock(data["paddocks"]["a"],{"soil_type":"invalid"})
+
+
 def test_unknown_soil_never_zero_primary_but_components_continue():
     result = calculate_paddock(state(),DAY,weather(),[],config())["latest"]
     assert result["primary"]["spechr"] is result["primary"]["experimental_wsc"] is None
@@ -77,6 +91,37 @@ def test_complete_replay_idempotency_and_correction_propagation():
     corrected = calculate_paddock(p,end,changed,soils(),config())
     assert corrected["latest"]["primary"]["spechr"] < result["latest"]["primary"]["spechr"]
     assert corrected["latest"]["hash"] != result["latest"]["hash"]
+
+
+def test_daily_change_uses_final_wsc_with_fallback_and_route_changes():
+    from custom_components.pasture_wsc.paddocks import selected_wsc
+    p = calibrated(scenario_enabled=True)
+    w = weather(3)
+    # Estimated radiation forces only the middle day onto the scenario route,
+    # without breaking primary development history.
+    w[DAY+timedelta(days=1)]["weather"]["solar_energy"]["intervals"] = [{"quality":"estimated"}]
+    rows = calculate_paddock(p,DAY+timedelta(days=2),w,soils(3),config())["records"]
+    assert [selected_wsc(row,p["settings"])[0] for row in rows] == ["primary","scenario","primary"]
+    assert rows[0]["daily_change"] is None
+    assert rows[0]["scenario_daily_change"] is None
+    for previous,current in zip(rows,rows[1:]):
+        assert current["daily_change"] == pytest.approx(
+            selected_wsc(current,p["settings"])[1]-selected_wsc(previous,p["settings"])[1])
+        assert current["scenario_daily_change"] == pytest.approx(
+            current["scenario"]["experimental_wsc"]-previous["scenario"]["experimental_wsc"])
+
+
+def test_daily_change_does_not_bridge_missing_wsc_and_backfill_repairs_it():
+    p = calibrated(scenario_enabled=True)
+    w = weather(4)
+    w[DAY+timedelta(days=1)]["weather"]["solar_energy"]["value"] = None
+    rows = calculate_paddock(p,DAY+timedelta(days=3),w,soils(4),config())["records"]
+    assert rows[1]["daily_change"] is rows[2]["daily_change"] is None
+    assert rows[1]["scenario_daily_change"] is rows[2]["scenario_daily_change"] is None
+    assert rows[3]["daily_change"] is not None
+    repaired = calculate_paddock(p,DAY+timedelta(days=3),weather(4),soils(4),config())["records"]
+    assert repaired[1]["daily_change"] is not None
+    assert repaired[2]["daily_change"] is not None
 
 
 def test_gap_blocks_later_primary_and_scenario_until_backfill():
@@ -157,3 +202,74 @@ def test_results_versions_and_additive_storage_migration():
         await restored.load()
         assert restored.data["paddock_results"] == store.data["paddock_results"]
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("preference,primary,scenario,scenario_enabled,enabled,expected", [
+    ("primary", 12.0, 14.0, True, True, ("primary", 12.0)),
+    ("scenario", 12.0, 14.0, True, True, ("scenario", 14.0)),
+    ("primary", None, 14.0, True, True, ("scenario", 14.0)),
+    ("scenario", 12.0, None, True, True, ("primary", 12.0)),
+    ("scenario", 12.0, 14.0, False, True, ("primary", 12.0)),
+    ("primary", None, 14.0, False, True, (None, None)),
+    ("primary", None, None, True, True, (None, None)),
+    ("primary", 0.0, 14.0, True, True, ("primary", 0.0)),
+    ("primary", float("nan"), 14.0, True, True, ("scenario", 14.0)),
+    ("scenario", 12.0, float("inf"), True, True, ("primary", 12.0)),
+    ("primary", 12.0, 14.0, True, False, (None, None)),
+])
+def test_default_wsc_route_selection(preference, primary, scenario, scenario_enabled, enabled, expected):
+    from custom_components.pasture_wsc.paddocks import selected_wsc
+    result = {"primary": {"experimental_wsc": primary}, "scenario": {"experimental_wsc": scenario}}
+    settings = {"wsc_preference": preference, "scenario_enabled": scenario_enabled, "enabled": enabled}
+    assert selected_wsc(result, settings) == expected
+
+
+def test_wsc_preference_persists_and_invalid_preference_rejected():
+    async def run():
+        backend = MemoryStore()
+        store = PastureStore(None, "entry", backend)
+        await store.load()
+        initialize_paddocks(store.data, [{"id": "summer", "name": "Summer", "start_date": DAY.isoformat()}], "America/Toronto")
+        paddock = store.data["paddocks"]["summer"]
+        cycle = deepcopy(paddock["cycle"])
+        update_paddock(paddock, {"wsc_preference": "scenario"})
+        assert paddock["settings"]["scenario_enabled"] is False
+        assert paddock["cycle"] == cycle
+        with pytest.raises(ValueError, match="Unknown WSC route"):
+            update_paddock(paddock, {"wsc_preference": "invalid"})
+        await store.save()
+        restarted = PastureStore(None, "entry", backend)
+        await restarted.load()
+        assert restarted.data["paddocks"]["summer"]["settings"]["wsc_preference"] == "scenario"
+    import asyncio
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("value,expected", [(0, "low"), (9.999, "low"), (10, "medium"),
+                                            (19.999, "medium"), (20, "high"), (25, "high"),
+                                            (None, None), (float("nan"), None)])
+def test_carbohydrate_level_boundaries(value, expected):
+    from custom_components.pasture_wsc.paddocks import carbohydrate_level
+    result = {"primary": {"experimental_wsc": value}}
+    assert carbohydrate_level(result, {}) == expected
+
+
+def test_carbohydrate_levels_follow_route_and_custom_cutoffs():
+    from custom_components.pasture_wsc.paddocks import carbohydrate_level
+    result = {"primary": {"experimental_wsc": 7}, "scenario": {"experimental_wsc": 17}}
+    settings = {"scenario_enabled": True, "wsc_preference": "scenario",
+                "carbohydrate_low_cutoff": 8, "carbohydrate_high_cutoff": 16}
+    assert carbohydrate_level(result, settings) == "high"
+    settings["scenario_enabled"] = False
+    assert carbohydrate_level(result, settings) == "low"
+    settings["enabled"] = False
+    assert carbohydrate_level(result, settings) is None
+
+
+@pytest.mark.parametrize("low,high", [(0,20), (20,20), (21,20), (10,101), (float("nan"),20), (10,float("inf"))])
+def test_invalid_carbohydrate_cutoffs_rejected(low, high):
+    paddock = state()
+    original = deepcopy(paddock)
+    with pytest.raises(ValueError, match="Carbohydrate cutoffs"):
+        update_paddock(paddock, {"carbohydrate_low_cutoff": low, "carbohydrate_high_cutoff": high})
+    assert paddock == original

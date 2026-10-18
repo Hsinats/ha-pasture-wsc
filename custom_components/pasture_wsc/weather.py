@@ -8,7 +8,7 @@ from math import isfinite
 from .engine.weather import (Interval, Quality, Reading, SourcePolicy, Variable,
                              counter_intervals, readings_to_intervals, solar_energy_intervals)
 
-WEATHER_ATTRIBUTES = {"temperature":"temperature","cloud_cover":"cloud_coverage","humidity":"humidity"}
+WEATHER_ATTRIBUTES = {"temperature":"temperature","cloud_cover":"cloud_coverage","humidity":"humidity","wind_speed":"wind_speed"}
 
 
 def sources_for(config):
@@ -54,7 +54,8 @@ def capture(source, state, now, *, initial=False):
         value = state.state
     unit = source.get("unit_override") or attributes.get("unit_of_measurement","")
     if source["kind"].startswith("weather_"):
-        unit = attributes.get("temperature_unit","") if source["variable"] == "temperature" else "%"
+        unit = (attributes.get("temperature_unit","") if source["variable"] == "temperature" else
+                attributes.get("wind_speed_unit","") if source["variable"] == "wind_speed" else "%")
     device = attributes.get("device_class")
     expected = {"temperature":"temperature","irradiance":"irradiance","humidity":"humidity"}.get(source["variable"])
     if device and expected and device != expected:
@@ -124,16 +125,24 @@ def forecast_records(entity, payload, units, issued):
             start,end = start.astimezone(timezone.utc),end.astimezone(timezone.utc)
             if start < issued or not timedelta(0) < end-start <= timedelta(hours=1):
                 continue
-            for variable,attribute in WEATHER_ATTRIBUTES.items():
+            for variable,attribute in {**WEATHER_ATTRIBUTES,"precipitation":"precipitation"}.items():
                 if a.get(attribute) is None:
                     continue
                 from .engine.weather import normalize, UNITS
-                unit = units.get("temperature_unit","") if variable == "temperature" else "%"
-                value = normalize(Variable(variable),float(a[attribute]),unit)
+                unit = (units.get("temperature_unit","") if variable == "temperature" else
+                        units.get("wind_speed_unit","") if variable == "wind_speed" else
+                        units.get("precipitation_unit","") if variable == "precipitation" else "%")
+                try:
+                    value = normalize(Variable(variable),float(a[attribute]),unit)
+                except (ValueError,TypeError):
+                    # One unusable field must not discard the hour's other data.
+                    continue
                 result.append({"variable":variable,"start":start.isoformat(),"end":end.isoformat(),
                                "value":value,"source":f"forecast:{entity}:{variable}","quality":"forecast_proxy",
                                "timestamp":issued.isoformat(),"unit":UNITS[Variable(variable)],
-                               "original_value":a[attribute],"original_unit":unit,"flags":["hourly_forecast_interval_mean_assumption"]})
+                               "original_value":a[attribute],"original_unit":unit,"flags":[
+                                   "hourly_forecast_interval_total_assumption" if variable == "precipitation"
+                                   else "hourly_forecast_interval_mean_assumption"]})
         except (ValueError,TypeError,KeyError):
             continue
     return result

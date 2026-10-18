@@ -25,6 +25,22 @@ def config(**overrides):
                      "timezone":"America/Toronto",**overrides})
 
 
+def test_soil_type_defaults_and_validation():
+    assert config()["soil_type"] == "unsure"
+    for soil_type in ("unsure", "sandy", "loam", "clay"):
+        assert config(soil_type=soil_type)["soil_type"] == soil_type
+    with pytest.raises(ValueError, match="Unknown soil type"):
+        config(soil_type="invalid")
+
+
+def test_soil_type_setup_and_options_dropdown(ha_contract):
+    from custom_components.pasture_wsc.config_flow import location_schema, policy_schema
+    for schema in (location_schema(config()),):
+        field = next(field for field in schema.schema if field.schema == "soil_type")
+        assert field.default() == "unsure"
+    assert not any(field.schema == "soil_type" for field in policy_schema(config()).schema)
+
+
 def source(**overrides):
     return {"id":"stable-source","entity_id":"sensor.station","variable":"temperature","kind":"instantaneous",
             "priority":0,"freshness":3600,"offset":0,"unit_override":"","semantics":"Calibrated air temperature",**overrides}
@@ -109,7 +125,7 @@ def test_mapping_revisions_and_paddocks_remain_stable():
     assert c["paddocks"] == before
     assert source_key(source()) != source_key(source(offset=1))
     defaults = sources_for(c)
-    assert len(defaults) == 4
+    assert len(defaults) == 5
     assert all(s["kind"] == "weather_proxy" for s in defaults[1:])
     with pytest.raises(ValueError):
         validate_source(source(variable="solar_energy"))
@@ -122,6 +138,32 @@ def test_forecast_issued_before_target_and_no_daily_mean_fabrication():
     assert all(r["quality"] == "forecast_proxy" and r["start"] > A.isoformat() for r in records)
     daily = [rows[0],{**rows[1],"datetime":(A+timedelta(days=1)).isoformat()}]
     assert not forecast_records("weather.met",daily,{"temperature_unit":"°F"},A)
+
+
+def test_forecast_rain_amount_conversion_missing_and_probability():
+    rows = [{"datetime":(A+timedelta(hours=h)).isoformat(),"temperature":20,
+             "precipitation":.1,"precipitation_probability":90} for h in range(3)]
+    records = forecast_records("weather.met",rows,{"temperature_unit":"°C","precipitation_unit":"in"},A)
+    rain = [r for r in records if r["variable"] == "precipitation"]
+    assert len(rain) == 2
+    assert all(r["value"] == pytest.approx(2.54) for r in rain)
+    assert all(r["unit"] == "mm" for r in rain)
+    for row in rows:
+        row.pop("precipitation")
+    records = forecast_records("weather.met",rows,{"temperature_unit":"°C","precipitation_unit":"mm"},A)
+    assert not any(r["variable"] == "precipitation" for r in records)
+
+
+def test_forecast_rain_aggregates_as_daily_total(ha_contract):
+    from custom_components.pasture_wsc.coordinator import daily_record
+    rows = [{"datetime":(A+timedelta(hours=h)).isoformat(),"temperature":20,
+             "precipitation":1} for h in range(25)]
+    records = forecast_records("weather.met",rows,{"temperature_unit":"°C","precipitation_unit":"mm"},A)
+    data = {"observations":[],"forecasts":{str(n):r for n,r in enumerate(records)}}
+    result = daily_record(DAY,config(allow_forecast=True,weather_entities=["weather.met"]),data)
+    assert result["weather"]["precipitation"]["value"] == pytest.approx(24)
+    assert result["weather"]["precipitation"]["coverage"] == 1
+    assert daily_record(DAY,config(allow_forecast=False),data)["weather"]["precipitation"]["value"] is None
 
 
 def test_schedule_timezone_dst_and_selected_clock():
@@ -163,12 +205,14 @@ def ha_contract(monkeypatch):
     # Dataclass subclass requires real dataclass base for inherited description keys.
     from dataclasses import make_dataclass
     Description = make_dataclass("Description",[("key",str),("translation_key",str),("native_unit_of_measurement",str,None),
-                     ("device_class",str,None),("entity_category",str,None)],frozen=True,kw_only=True)
+                     ("device_class",str,None),("entity_category",str,None),("state_class",str,None),
+                     ("options",list,None),("suggested_display_precision",int,None),("entity_registry_enabled_default",bool,True)],frozen=True,kw_only=True)
     update = sys.modules["homeassistant.helpers.update_coordinator"]
     update.DataUpdateCoordinator,update.CoordinatorEntity = Coordinator,Entity
     sensor = sys.modules["homeassistant.components.sensor"]
     sensor.SensorEntity,sensor.SensorEntityDescription = type("SensorEntity",(),{}),Description
-    sensor.SensorDeviceClass = SimpleNamespace(TEMPERATURE="temperature",HUMIDITY="humidity",DATE="date")
+    sensor.SensorDeviceClass = SimpleNamespace(TEMPERATURE="temperature",HUMIDITY="humidity",DATE="date",ENUM="enum")
+    sensor.SensorStateClass = SimpleNamespace(MEASUREMENT="measurement")
     sys.modules["homeassistant.const"].EntityCategory = SimpleNamespace(DIAGNOSTIC="diagnostic")
     class Flow:
         def __init_subclass__(cls,**kwargs):
@@ -197,7 +241,7 @@ def ha_contract(monkeypatch):
                  "SelectSelector","SelectSelectorConfig","TimeSelector","BooleanSelector","DateSelector"):
         setattr(sys.modules["homeassistant.helpers.selector"],name,Selector)
     sys.modules["homeassistant.helpers"].selector = sys.modules["homeassistant.helpers.selector"]
-    for platform,cls in (("switch","SwitchEntity"),("number","NumberEntity"),("text","TextEntity"),("button","ButtonEntity")):
+    for platform,cls in (("button","ButtonEntity"),("switch","SwitchEntity"),("number","NumberEntity"),("text","TextEntity"),("date","DateEntity"),("select","SelectEntity")):
         name = f"homeassistant.components.{platform}"
         monkeypatch.setitem(sys.modules,name,ModuleType(name))
         setattr(sys.modules[name],cls,type(cls,(),{}))
@@ -207,10 +251,13 @@ def ha_contract(monkeypatch):
     notification.async_create = lambda *args,**kwargs:None
     monkeypatch.setitem(sys.modules,notification.__name__,notification)
     sys.modules["homeassistant.components"].persistent_notification = notification
+    exceptions = ModuleType("homeassistant.exceptions")
+    exceptions.HomeAssistantError = type("HomeAssistantError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, exceptions.__name__, exceptions)
     yield
     for name in ("custom_components.pasture_wsc.coordinator","custom_components.pasture_wsc.sensor","custom_components.pasture_wsc.config_flow",
                  "custom_components.pasture_wsc.entity","custom_components.pasture_wsc.switch","custom_components.pasture_wsc.number",
-                 "custom_components.pasture_wsc.text","custom_components.pasture_wsc.button"):
+                 "custom_components.pasture_wsc.text","custom_components.pasture_wsc.date","custom_components.pasture_wsc.select","custom_components.pasture_wsc.button"):
         sys.modules.pop(name,None)
 
 
@@ -223,8 +270,8 @@ def test_config_flow_options_and_reconfigure_preserve_identity(ha_contract):
         flow.hass = hass
         assert (await flow.async_step_user())["step_id"] == "user"
         location = {k:config()[k] for k in ("latitude","longitude","elevation","timezone")}
-        assert (await flow.async_step_user(location))["step_id"] == "weather"
-        assert (await flow.async_step_weather({"weather_entities":["weather.met"]}))["step_id"] == "paddocks"
+        assert (await flow.async_step_user(location))["step_id"] == "measured_inputs"
+        assert (await flow.async_step_measured_inputs({"weather_entities":["weather.met"]}))["step_id"] == "paddocks"
         assert (await flow.async_step_paddocks({"names":"Summer\nWinter\nBack"}))["type"] == "menu"
         assert (await flow.async_step_add_source())["step_id"] == "source"
         assert (await flow.async_step_source({k:v for k,v in source().items() if k!="id"}))["type"] == "menu"
@@ -357,29 +404,282 @@ def test_bundle_and_translations():
     assert json.loads((root/"custom_components/pasture_wsc/strings.json").read_text(encoding="utf-8")) == json.loads((root/"custom_components/pasture_wsc/translations/en.json").read_text(encoding="utf-8"))
 
 
-def test_paddock_platforms_group_by_stable_device_and_request_only(ha_contract):
+def test_paddock_platforms_group_by_stable_device_and_edit_cycle(ha_contract):
     from unittest.mock import AsyncMock
     from custom_components.pasture_wsc.paddocks import initialize_paddocks
-    from custom_components.pasture_wsc import sensor, switch, number, text, button
+    from custom_components.pasture_wsc import sensor, switch, number, text, select, button, date as date_platform
     data = {}
     initialize_paddocks(data,paddocks_from_names("Summer\nWinter",DAY),"America/Toronto")
     coordinator = SimpleNamespace(entry=SimpleNamespace(entry_id="entry"),store=SimpleNamespace(data=data),
-        data={"paddocks":{}},last_update_success=True,async_request_cycle=AsyncMock())
+        data={"paddocks":{}},last_update_success=True,async_start_cycle=AsyncMock())
     entry = SimpleNamespace(runtime_data=coordinator)
     entities = []
     async def run():
-        for platform in (sensor,switch,number,text,button):
+        for platform in (sensor,switch,number,text,date_platform,select,button):
             await platform.async_setup_entry(None,entry,lambda new:entities.extend(new))
     asyncio.run(run())
     paddock_entities = [e for e in entities if hasattr(e,"pid")]
-    assert len(paddock_entities) == 2*(len(sensor.PADDOCK_SENSORS)+5)
+    assert len(paddock_entities) == 2*(len(sensor.PADDOCK_SENSORS)+6)
     assert len({e._attr_unique_id for e in entities}) == len(entities)
     for e in paddock_entities:
         assert e._attr_device_info["identifiers"] == {("pasture_wsc",f"entry_{e.pid}")}
         assert e._attr_device_info["via_device"] == ("pasture_wsc","entry")
     before = deepcopy(data)
-    b = next(e for e in paddock_entities if isinstance(e,button.NewCycleButton))
-    asyncio.run(b.async_press())
-    coordinator.async_request_cycle.assert_awaited_once_with(b.pid)
+    entity = next(e for e in paddock_entities if isinstance(e,date_platform.GrowthCycleDate))
+    assert entity.native_value == DAY
+    asyncio.run(entity.async_set_value(DAY))
+    coordinator.async_start_cycle.assert_not_awaited()
+    asyncio.run(entity.async_set_value(DAY + timedelta(days=1)))
+    coordinator.async_start_cycle.assert_awaited_once_with(
+        entity.pid, DAY + timedelta(days=1), data["paddocks"][entity.pid]["cycle"]["id"], confirmed=True)
+    assert data == before
+    from homeassistant.exceptions import HomeAssistantError
+    coordinator.async_start_cycle.side_effect = ValueError("Invalid cycle start")
+    with pytest.raises(HomeAssistantError, match="Invalid cycle start"):
+        asyncio.run(entity.async_set_value(DAY + timedelta(days=2)))
     assert data == before
     assert all(not e.available for e in paddock_entities if isinstance(e,number.AssumedMoistureNumber))
+
+
+def test_sensor_presentation_and_disabled_dependency_data(ha_contract):
+    from custom_components.pasture_wsc.sensor import PastureSensor, SENSORS, PADDOCK_SENSORS, NUMERIC_SENSORS, FRACTION_SENSORS, DISABLED_DEFAULT_SENSORS
+    for description in (*SENSORS, *PADDOCK_SENSORS):
+        if description.key in ("spechr", "scenario_spechr"):
+            assert description.state_class == "measurement"
+        assert description.entity_registry_enabled_default == (description.key not in DISABLED_DEFAULT_SENSORS or description.key == "paddock_last_completed_day")
+        if description.key in NUMERIC_SENSORS:
+            assert description.suggested_display_precision == (3 if description.key in FRACTION_SENSORS else 1)
+        else:
+            assert description.suggested_display_precision is None
+    coordinator = SimpleNamespace(entry=SimpleNamespace(entry_id="entry"), data={
+        "last_completed_day": "2026-06-01", "last_weather_completed_day": "2026-06-02"})
+    # No completed-day entities are instantiated; status reads coordinator data directly.
+    status = PastureSensor(coordinator, next(d for d in SENSORS if d.key == "model_status"))
+    assert status.extra_state_attributes["last_completed_day"] == "2026-06-01"
+    assert status.extra_state_attributes["last_weather_completed_day"] == "2026-06-02"
+
+
+def test_growth_cycle_configuration_step_removed(ha_contract):
+    from custom_components.pasture_wsc.config_flow import PastureWSCOptionsFlow
+    flow = PastureWSCOptionsFlow()
+    result = asyncio.run(flow.async_step_paddock_menu())
+    assert result["menu_options"] == ["paddock_settings", "manage_paddocks", "finish"]
+    assert not hasattr(flow, "async_step_confirm_cycle")
+    assert not hasattr(flow, "async_step_cancel_cycle_request")
+
+
+def test_default_wsc_uses_coordinator_and_live_preference(ha_contract):
+    from unittest.mock import AsyncMock
+    from custom_components.pasture_wsc.sensor import PaddockSensor, PADDOCK_SENSORS
+    from custom_components.pasture_wsc.select import WSCPreferenceSelect
+    from custom_components.pasture_wsc.paddocks import initialize_paddocks, update_paddock
+    from homeassistant.exceptions import HomeAssistantError
+    store_data = {}
+    initialize_paddocks(store_data, paddocks_from_names("Summer", DAY), "America/Toronto")
+    pid = next(iter(store_data["paddocks"]))
+    state = store_data["paddocks"][pid]
+    state["settings"]["scenario_enabled"] = True
+    state["settings"].pop("wsc_preference")  # Existing stored settings predate this control.
+    result = {"primary": {"experimental_wsc": 12.3456, "warnings": ["primary_warning"]},
+              "scenario": {"experimental_wsc": 14.5678, "warnings": ["scenario_warning"]},
+              "input_hash": "primary_hash", "scenario_input_hash": "scenario_hash"}
+    coordinator = SimpleNamespace(entry=SimpleNamespace(entry_id="entry"), store=SimpleNamespace(data=store_data),
+                                  data={"paddocks": {pid: result}}, last_update_success=True)
+    result.update(soil={"measured_value":.4}, estimated_soil={"value":.52,"flags":["uncalibrated_water_balance"]},
+                  selected_moisture_method="measured")
+    for key,expected in (("soil_moisture_measured",.4),("soil_moisture_estimated",.52)):
+        moisture = PaddockSensor(coordinator,pid,next(d for d in PADDOCK_SENSORS if d.key == key))
+        assert moisture.native_value == expected
+        assert moisture.entity_description.state_class == "measurement"
+        assert moisture.extra_state_attributes["selected_moisture_method"] == "measured"
+    result["estimated_soil"]["value"] = None
+    assert moisture.native_value is None
+    async def update(pid, changes):
+        update_paddock(store_data["paddocks"][pid], changes)
+    coordinator.async_update_paddock = AsyncMock(side_effect=update)
+    from custom_components.pasture_wsc.select import SoilTypeSelect
+    soil_select = SoilTypeSelect(coordinator,pid)
+    assert soil_select.current_option == "unsure"
+    asyncio.run(soil_select.async_select_option("sandy"))
+    assert soil_select.current_option == "sandy"
+    with pytest.raises(HomeAssistantError):
+        asyncio.run(soil_select.async_select_option("invalid"))
+    # Instantiate only the default sensor; neither route sensor is needed.
+    sensor = PaddockSensor(coordinator, pid, next(d for d in PADDOCK_SENSORS if d.key == "wsc"))
+    level = PaddockSensor(coordinator, pid, next(d for d in PADDOCK_SENSORS if d.key == "carbohydrate_level"))
+    result.update(daily_change=-1.25, scenario_daily_change=0.75)
+    result["primary"]["trend"] = 99
+    result["scenario"]["trend"] = 98
+    daily = PaddockSensor(coordinator, pid, next(d for d in PADDOCK_SENSORS if d.key == "wsc_trend"))
+    scenario_daily = PaddockSensor(coordinator, pid, next(d for d in PADDOCK_SENSORS if d.key == "scenario_trend"))
+    assert daily.native_value == -1.25
+    assert scenario_daily.native_value == 0.75
+    result["scenario"]["moisture_effect"] = -0.6
+    estimated_contribution = PaddockSensor(coordinator,pid,next(
+        d for d in PADDOCK_SENSORS if d.key == "scenario_moisture_effect"))
+    assert estimated_contribution.native_value == -0.6
+    for key,value in (("moisture_factor",.801),("development",.123)):
+        result["scenario"][key] = value
+        estimated = PaddockSensor(coordinator,pid,next(
+            d for d in PADDOCK_SENSORS if d.key == f"scenario_{key}"))
+        assert estimated.native_value == value
+        assert estimated.entity_description.state_class == "measurement"
+        assert estimated.entity_description.suggested_display_precision == 3
+        result["scenario"][key] = None
+        assert estimated.native_value is None
+    result["rain_accumulation"] = {"value":12.5,"missing_days":2,"complete":False}
+    rain_sensor = PaddockSensor(coordinator,pid,next(
+        d for d in PADDOCK_SENSORS if d.key == "rain_accumulation"))
+    assert rain_sensor.native_value == 12.5
+    assert rain_sensor.entity_description.native_unit_of_measurement == "mm"
+    assert rain_sensor.extra_state_attributes["missing_days"] == 2
+    result["live_rain"] = {"measured":{"value":2,"coverage":.5},"estimated":{"value":3,"coverage":1}}
+    for route,value in (("measured",2),("estimated",3)):
+        live = PaddockSensor(coordinator,pid,next(
+            d for d in PADDOCK_SENSORS if d.key == f"rain_accumulation_{route}"))
+        assert live.native_value == value
+        assert live.entity_description.state_class == "measurement"
+        assert live.extra_state_attributes["coverage"] == result["live_rain"][route]["coverage"]
+    assert level.native_value == "medium" and level.available
+    assert level.entity_description.options == ["low", "medium", "high"]
+    assert level.extra_state_attributes["estimated_percentage"] == 12.3456
+    assert level.extra_state_attributes["low_cutoff_percent"] == 10
+    assert level.extra_state_attributes["high_cutoff_percent"] == 20
+    preference = WSCPreferenceSelect(coordinator, pid)
+    assert preference.current_option == "primary"
+    assert sensor.available and sensor.native_value == 12.3456
+    assert sensor.entity_description.suggested_display_precision == 1
+    assert sensor.extra_state_attributes["selected_route"] == "primary"
+    asyncio.run(preference.async_select_option("scenario"))
+    assert preference.current_option == "scenario"
+    assert sensor.native_value == 14.5678
+    assert sensor.extra_state_attributes["warnings"] == ["scenario_warning"]
+    assert sensor.extra_state_attributes["source_data_hash"] == "scenario_hash"
+    assert sensor.extra_state_attributes["fallback_used"] is False
+    state["settings"]["scenario_enabled"] = False
+    assert sensor.native_value == 12.3456
+    assert sensor.extra_state_attributes["fallback_used"] is True
+    result["primary"]["experimental_wsc"] = None
+    assert sensor.native_value is None and not sensor.available
+    assert level.native_value is None and not level.available
+    assert sensor.extra_state_attributes["selected_route"] is None
+    with pytest.raises(HomeAssistantError):
+        asyncio.run(preference.async_select_option("invalid"))
+    assert preference.current_option == "scenario"
+    state["settings"]["scenario_enabled"] = True
+    coordinator.last_update_success = False
+    assert not sensor.available
+
+
+def test_mark_cut_uses_local_today_archives_and_ignores_repeat(ha_contract,monkeypatch):
+    from unittest.mock import AsyncMock
+    from zoneinfo import ZoneInfo
+    from custom_components.pasture_wsc import button
+    from custom_components.pasture_wsc.paddocks import initialize_paddocks,start_cycle
+    now = datetime(2026,6,3,1,tzinfo=timezone.utc)  # June 2 in Toronto.
+    class Clock:
+        @staticmethod
+        def now(zone):
+            return now.astimezone(zone)
+    monkeypatch.setattr(button,"datetime",Clock)
+    data = {}
+    initialize_paddocks(data,paddocks_from_names("Summer\nWinter",DAY),"America/Toronto")
+    pid,other = data["paddocks"]
+    untouched = deepcopy(data["paddocks"][other])
+    old_id = data["paddocks"][pid]["cycle"]["id"]
+    async def cut(target,day,expected,confirmed):
+        start_cycle(data["paddocks"][target],day,now.astimezone(ZoneInfo("America/Toronto")),
+                    "America/Toronto",confirmed=confirmed,expected_cycle=expected)
+    coordinator = SimpleNamespace(entry=SimpleNamespace(entry_id="entry"),
+        store=SimpleNamespace(data=data),config=config(),async_start_cycle=AsyncMock(side_effect=cut))
+    entity = button.MarkPaddockCutButton(coordinator,pid)
+    asyncio.run(entity.async_press())
+    coordinator.async_start_cycle.assert_awaited_once_with(pid,date(2026,6,2),old_id,confirmed=True)
+    assert data["paddocks"][pid]["cycle"]["start_date"] == "2026-06-02"
+    assert data["paddocks"][pid]["archives"][0]["id"] == old_id
+    assert data["paddocks"][other] == untouched
+    asyncio.run(entity.async_press())
+    assert coordinator.async_start_cycle.await_count == 1
+    assert len(data["paddocks"][pid]["archives"]) == 1
+
+
+def test_add_paddock_asks_soil_type_and_persists_choice(ha_contract):
+    from unittest.mock import AsyncMock
+    from custom_components.pasture_wsc.config_flow import PastureWSCOptionsFlow
+    from custom_components.pasture_wsc.coordinator import PastureCoordinator
+    data = {"paddocks":{}}
+    entry = SimpleNamespace(entry_id="entry",data={},options={})
+    hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=lambda *a,**k:None))
+    coordinator = object.__new__(PastureCoordinator)
+    coordinator.hass,coordinator.entry,coordinator.config = hass,entry,config(soil_type="clay")
+    coordinator._operation_lock = asyncio.Lock()
+    coordinator.store = SimpleNamespace(data=data,save=AsyncMock())
+    entry.runtime_data = coordinator
+    flow = PastureWSCOptionsFlow()
+    flow.config_entry = entry
+    flow._values = config()
+    form = asyncio.run(flow.async_step_add_paddock())
+    field = next(k for k in form["data_schema"].schema if k.schema == "soil_type")
+    assert field.default() == "unsure"
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("America/Toronto")).date()
+    result = asyncio.run(flow.async_step_add_paddock({"name":"New paddock","start_date":today.isoformat(),"soil_type":"sandy"}))
+    assert result["step_id"] == "manage_paddocks"
+    saved = next(iter(coordinator.store.data["paddocks"].values()))
+    assert saved["settings"]["soil_type"] == "sandy"
+    assert coordinator.config["paddocks"][0]["soil_type"] == "sandy"
+
+
+def test_setup_sources_then_weather_then_optional_advanced(ha_contract):
+    from custom_components.pasture_wsc.config_flow import PastureWSCConfigFlow
+    flow = PastureWSCConfigFlow()
+    flow._values = config(sources=[source()])
+    measured = asyncio.run(flow.async_step_measured_inputs({"precipitation":"sensor.rain","rain_kind":"daily_reset","wind_speed":"sensor.wind"}))
+    assert measured["step_id"] == "paddocks"
+    form = asyncio.run(flow.async_step_measured_inputs())
+    assert all(k.schema not in ("minimum_coverage","soil_semantics","soil_freshness") for k in form["data_schema"].schema)
+    rain = next(s for s in flow._values["sources"] if s["id"] == "setup_precipitation")
+    assert rain["kind"] == "daily_reset"
+    assert source() in flow._values["sources"]
+    rain["freshness"] = 7200
+    asyncio.run(flow.async_step_measured_inputs({"precipitation":"sensor.rain","rain_kind":"daily_reset"}))
+    assert next(s for s in flow._values["sources"] if s["id"] == "setup_precipitation")["freshness"] == 7200
+    assert not any(s["id"] == "setup_wind_speed" for s in flow._values["sources"])
+    assert asyncio.run(flow.async_step_weather({"allow_forecast":True}))["step_id"] == "policies"
+    advanced = asyncio.run(flow.async_step_policies({"advanced":True,"assume_clear_sky":False}))
+    assert advanced["step_id"] == "advanced_policies"
+    assert {k.schema for k in advanced["data_schema"].schema} == {"calculation_time","minimum_coverage","solar_minimum_coverage"}
+    assert asyncio.run(flow.async_step_advanced_policies({"minimum_coverage":0}))["errors"]
+    assert asyncio.run(flow.async_step_advanced_policies({"minimum_coverage":.9}))["step_id"] == "paddocks"
+    assert flow._values["minimum_coverage"] == .9
+    assert "advanced" not in flow._values
+
+
+def test_soil_details_conditional_and_weather_edit_preserves_soil(ha_contract):
+    from custom_components.pasture_wsc.config_flow import PastureWSCOptionsFlow
+    flow = PastureWSCOptionsFlow()
+    flow._values = config(sources=[source()])
+    flow._is_options = True
+    form = asyncio.run(flow.async_step_measured_inputs({"soil_entity":"sensor.soil"}))
+    assert form["step_id"] == "init"
+    form = asyncio.run(flow.async_step_measured_inputs({"soil_entity":"sensor.soil","advanced":True}))
+    assert form["step_id"] == "advanced_policies"
+    assert "soil_freshness" in {k.schema for k in form["data_schema"].schema}
+    assert flow._values["soil_semantics"] == "Unknown; diagnostic only"
+    assert asyncio.run(flow.async_step_weather_settings({"soil_entity":"sensor.soil","weather_entities":["weather.met"]}))["step_id"] == "init"
+    assert flow._values["soil_entity"] == "sensor.soil"
+    assert asyncio.run(flow.async_step_policies({}))["step_id"] == "init"
+    assert source() in flow._values["sources"]
+
+
+def test_new_setup_copy_matches_visible_fields(ha_contract):
+    from custom_components.pasture_wsc.config_flow import measured_schema, weather_schema, policy_schema
+    document = json.loads((Path(__file__).resolve().parents[1]/"custom_components/pasture_wsc/strings.json").read_text(encoding="utf-8"))
+    for step,schema in (("measured_inputs",measured_schema(config())),("weather",weather_schema(config())),("policies",policy_schema(config()))):
+        assert {k.schema for k in schema.schema} == set(document["config"]["step"][step]["data"])
+    assert "clearly labeled" not in json.dumps(document).lower()
+    # HA may resolve options labels via the menu entry's step id, so that alias
+    # must describe the entire combined form, not just the former weather page.
+    assert document["options"]["step"]["weather_settings"]["data"] == document["options"]["step"]["measured_inputs"]["data"]
+    for key in ("allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky","advanced"):
+        assert "_" not in document["options"]["step"]["weather_settings"]["data"][key]

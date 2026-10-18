@@ -9,25 +9,17 @@
           "latitude": "Latitude",
           "longitude": "Longitude",
           "elevation": "Elevation (m)",
-          "timezone": "Time zone"
+          "timezone": "Time zone",
+          "soil_type": "Soil type"
         }
       },
       "weather": {
-        "title": "Weather and completeness policies",
-        "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only. Historical backfill reads the configured weather entities and sensors from Home Assistant recorder. It makes no external requests. Cloud history can support the enabled solar estimate.",
+        "title": "Weather provider & forecasts",
+        "description": "Choose your weather integration. Current weather estimates and hourly forecasts can both supply estimated inputs. You can skip the provider when using your own sensors. Forecast collection begins now and cannot recover yesterday's predictions. Methods are shown on the paddock's WSC method and Moisture method diagnostics.",
         "data": {
-          "weather_entities": "Weather providers",
-          "calculation_time": "Daily calculation time (configured local time)",
-          "minimum_coverage": "Minimum temperature/cloud/humidity daily coverage (0–1)",
-          "solar_minimum_coverage": "Minimum daily solar coverage (0–1)",
-          "allow_estimated": "Allow provider-derived weather estimates (clearly labeled)",
-          "allow_forecast": "Archive and use hourly forecast proxies (clearly labeled)",
-          "estimate_solar": "Enable uncalibrated astronomy/cloud solar scenario",
-          "assume_clear_sky": "Explicitly assume clear sky for missing daylight cloud coverage",
-          "soil_entity": "Optional soil sensor (diagnostic only)",
-          "soil_semantics": "Soil measurement meaning/calibration notes",
-          "soil_freshness": "Soil freshness (seconds)",
-          "historical_backfill": "Fill missing past weather from local Home Assistant history"
+          "weather_entities": "Weather provider (estimates and forecasts)",
+          "allow_estimated": "Use current weather estimates",
+          "allow_forecast": "Use hourly forecasts"
         }
       },
       "paddocks": {
@@ -35,7 +27,7 @@
         "description": "Choose an approximate cut or grazing date within the past year. It initially applies to all paddocks; each date can be changed later. Enable historical backfill in weather settings to retrieve weather before installation.",
         "data": {
           "names": "Paddock names (one per line)",
-          "start_date": "Growth start date (approximate cut or grazing date)"
+          "start_date": "Last cut"
         }
       },
       "sources": {
@@ -49,7 +41,7 @@
       },
       "source": {
         "title": "Weather or station source",
-        "description": "Use instantaneous for temperature, irradiance, cloud or humidity; counter/daily_reset for energy or rain. Weather proxy is estimated; weather observation requires verified observation semantics. Changes preserve past records.",
+        "description": "Map a measured sensor or a weather attribute. Choose instantaneous for temperature, sunlight irradiance, humidity, cloud or wind. Choose counter/daily reset for rain or accumulated solar energy. A weather observation must represent verified observations; otherwise use weather proxy. Existing records are preserved.",
         "data": {
           "entity_id": "Source entity",
           "variable": "Measured variable",
@@ -81,7 +73,55 @@
           "latitude": "Latitude",
           "longitude": "Longitude",
           "elevation": "Elevation (m)",
-          "timezone": "Time zone"
+          "timezone": "Time zone",
+          "soil_type": "Soil type"
+        }
+      },
+      "measured_inputs": {
+        "title": "Inputs & fallbacks",
+        "description": "Choose any measured sensors first, then your weather provider and fallbacks below. Physical sensors are optional. Sunlight expects irradiance (W/m²); match rain counter type to your gauge. Weather estimates and forecasts remain labelled estimated. Cloud-based sunlight is approximate; leave clear-sky fallback off unless you want missing cloud data treated as clear. Recorded history can fill retained past inputs. Default timing and coverage are ready to use; advanced settings are optional. An ordinary soil moisture reading is shown for reference only: its percentage is not the moisture index used by the WSC model. Estimated soil moisture instead uses rainfall, weather and your paddock's soil type.",
+        "data": {
+          "temperature": "Temperature sensor",
+          "irradiance": "Sunlight sensor (irradiance)",
+          "precipitation": "Rain gauge",
+          "rain_kind": "Rain counter type",
+          "humidity": "Humidity sensor",
+          "wind_speed": "Wind sensor",
+          "soil_entity": "Soil moisture sensor (for reference only)",
+          "weather_entities": "Weather provider (estimates and forecasts)",
+          "allow_estimated": "Use current weather estimates",
+          "allow_forecast": "Use hourly weather forecasts",
+          "historical_backfill": "Fill gaps using recorded weather history",
+          "estimate_solar": "Estimate sunlight from cloud cover",
+          "assume_clear_sky": "Assume clear skies when cloud data is missing",
+          "advanced": "Show advanced settings"
+        }
+      },
+      "soil_details": {
+        "title": "Optional soil sensor details",
+        "description": "This setting applies only to the soil sensor you selected. One-hour freshness is a starting default: increase it if the sensor normally reports less often. This sensor is diagnostic; compatible model indices are configured per paddock.",
+        "data": {
+          "soil_freshness": "Reading expires after (seconds)"
+        }
+      },
+      "policies": {
+        "title": "Data gaps & fallbacks",
+        "description": "Use saved Home Assistant history where available. Without a sunlight sensor, cloud-based sunlight is an approximation. Assuming clear sky when cloud data is missing can overestimate sunlight; leave it off unless you want that fallback. Missing moisture weather holds the previous level and is reported under Data gaps. Advanced settings contain calculation time and coverage thresholds; the defaults are practical settings, not accuracy guarantees.",
+        "data": {
+          "historical_backfill": "Import recorded weather history",
+          "estimate_solar": "Estimate sunlight from cloud cover",
+          "assume_clear_sky": "Assume clear sky if cloud data is missing",
+          "advanced": "Review advanced settings"
+        }
+      },
+      "advanced_policies": {
+        "title": "Advanced data settings",
+        "description": "00:15 calculates the previous day in your configured time zone; pending data is retried. Weather coverage 0.8 requires 80% of a day's temperature, humidity, cloud, rain and wind intervals. Solar coverage 1.0 requires complete daily coverage. These are operational thresholds, not validated accuracy limits. Lower thresholds do not reconstruct missing sunlight or rain. Live rain totals instead expose their actual coverage.",
+        "data": {
+          "calculation_time": "Daily calculation time",
+          "minimum_coverage": "Minimum daily weather coverage (0–1)",
+          "solar_minimum_coverage": "Minimum daily sunlight coverage (0–1)",
+          "soil_freshness": "Soil reading expires after (seconds)"
         }
       }
     },
@@ -89,8 +129,7 @@
       "invalid_settings": "Check location, timezone, units and policy values.",
       "invalid_source": "Check source entity domain, variable, semantics, units and counter settings.",
       "invalid_paddocks": "Enter distinct, non-empty paddock names and a growth start date within the past year, no later than today.",
-      "invalid_paddock_settings": "Check paddock name, index compatibility and numeric settings.",
-      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed. If backfill is selected, choose within the past year and ensure recorder contains usable weather history.",
+      "invalid_paddock_settings": "Check paddock name, index compatibility and numeric settings. The low carbohydrate cutoff must be less than the high cutoff.",
       "backfill_failed": "Local weather history could not be imported. See the reason above or the Home Assistant logs."
     },
     "abort": {
@@ -111,7 +150,7 @@
       },
       "source": {
         "title": "Weather or station source",
-        "description": "Use instantaneous for temperature, irradiance, cloud or humidity; counter/daily_reset for energy or rain. Weather proxy is estimated; weather observation requires verified observation semantics. Changes preserve past records.",
+        "description": "Map a measured sensor or a weather attribute. Choose instantaneous for temperature, sunlight irradiance, humidity, cloud or wind. Choose counter/daily reset for rain or accumulated solar energy. A weather observation must represent verified observations; otherwise use weather proxy. Existing records are preserved.",
         "data": {
           "entity_id": "Source entity",
           "variable": "Measured variable",
@@ -141,10 +180,12 @@
         "menu_options": {
           "manage_paddocks": "Manage paddocks",
           "add_paddock": "Add paddock",
-          "weather_settings": "Weather settings",
-          "sources": "Source mappings",
+          "weather_settings": "Inputs & fallbacks",
+          "sources": "Advanced source mappings",
           "finish": "Save configuration",
-          "backfill": "Backfill weather"
+          "backfill": "Backfill weather",
+          "measured_inputs": "Measured inputs",
+          "policies": "Data gaps & fallbacks"
         }
       },
       "backfill": {
@@ -156,21 +197,23 @@
         }
       },
       "weather_settings": {
-        "title": "Weather and completeness policies",
-        "description": "Weather providers are conservatively labeled estimated. Estimates and forecasts require opt-in. Collection begins now; current values cannot fill yesterday's history. Soil sensors remain diagnostic only. Historical backfill reads the configured weather entities and sensors from Home Assistant recorder. It makes no external requests. Cloud history can support the enabled solar estimate.",
+        "title": "Inputs & fallbacks",
+        "description": "Choose any measured sensors first, then your weather provider and fallbacks below. Physical sensors are optional. Sunlight expects irradiance (W/m²); match rain counter type to your gauge. Weather estimates and forecasts remain labelled estimated. Cloud-based sunlight is approximate; leave clear-sky fallback off unless you want missing cloud data treated as clear. Recorded history can fill retained past inputs. Default timing and coverage are ready to use; advanced settings are optional. An ordinary soil moisture reading is shown for reference only: its percentage is not the moisture index used by the WSC model. Estimated soil moisture instead uses rainfall, weather and your paddock's soil type.",
         "data": {
-          "weather_entities": "Weather providers",
-          "calculation_time": "Daily calculation time (configured local time)",
-          "minimum_coverage": "Minimum temperature/cloud/humidity daily coverage (0–1)",
-          "solar_minimum_coverage": "Minimum daily solar coverage (0–1)",
-          "allow_estimated": "Allow provider-derived weather estimates (clearly labeled)",
-          "allow_forecast": "Archive and use hourly forecast proxies (clearly labeled)",
-          "estimate_solar": "Enable uncalibrated astronomy/cloud solar scenario",
-          "assume_clear_sky": "Explicitly assume clear sky for missing daylight cloud coverage",
-          "soil_entity": "Optional soil sensor (diagnostic only)",
-          "soil_semantics": "Soil measurement meaning/calibration notes",
-          "soil_freshness": "Soil freshness (seconds)",
-          "historical_backfill": "Fill missing past weather from local Home Assistant history"
+          "temperature": "Temperature sensor",
+          "irradiance": "Sunlight sensor (irradiance)",
+          "precipitation": "Rain gauge",
+          "rain_kind": "Rain counter type",
+          "humidity": "Humidity sensor",
+          "wind_speed": "Wind sensor",
+          "soil_entity": "Soil moisture sensor (for reference only)",
+          "weather_entities": "Weather provider (estimates and forecasts)",
+          "allow_estimated": "Use current weather estimates",
+          "allow_forecast": "Use hourly weather forecasts",
+          "historical_backfill": "Fill gaps using recorded weather history",
+          "estimate_solar": "Estimate sunlight from cloud cover",
+          "assume_clear_sky": "Assume clear skies when cloud data is missing",
+          "advanced": "Show advanced settings"
         }
       },
       "manage_paddocks": {
@@ -181,47 +224,97 @@
       },
       "add_paddock": {
         "title": "Add paddock",
-        "description": "Choose the approximate cut or grazing date within the past year. Save configuration afterward to load its entities. Enable historical backfill in weather settings to retrieve earlier weather.",
+        "description": "Choose the last cut date within the past year to start the regrowth calculation. Save configuration afterward to load its entities. Enable historical backfill in weather settings to retrieve earlier weather.",
         "data": {
           "name": "Paddock name",
-          "start_date": "Growth start date"
+          "start_date": "Last cut",
+          "soil_type": "Soil type"
         }
       },
       "paddock_menu": {
         "title": "Paddock management",
         "menu_options": {
           "paddock_settings": "Paddock settings",
-          "confirm_cycle": "Set growth start date",
-          "cancel_cycle_request": "Cancel cycle request",
           "manage_paddocks": "Select another paddock",
           "finish": "Save configuration"
         }
       },
-      "confirm_cycle": {
-        "title": "Set growth start date",
-        "description": "Choose the approximate cut or grazing date for {paddock}. The previous cycle starting {previous_start} remains archived. With backfill selected, local Home Assistant history is read before the cycle changes. Backfill supports up to 366 completed days. If no usable history is found, the current cycle remains active.",
-        "data": {
-          "start_date": "Growth start date",
-          "backfill": "Backfill weather from local Home Assistant history",
-          "confirm": "Confirm this growth start date"
-        }
-      },
       "paddock_settings": {
         "title": "Paddock settings",
-        "description": "Settings apply immediately. Save configuration afterward to reload source subscriptions. Generic soil moisture remains diagnostic. A calibrated index requires compatible dimensionless wi. Assumed wi is used only in the explicitly enabled scenario, throughout its cycle.",
+        "description": "Settings apply immediately. WSC cutoffs define descriptive levels, not animal-specific safety limits. Save configuration afterward to reload source subscriptions. Generic soil moisture remains diagnostic. A calibrated index requires compatible dimensionless wi. The estimated inputs model can use measured weather, estimates and forecasts. Moisture prefers a compatible measured index, then a rainfall/drying FAO-56 estimate using soil type, rooting depth and pasture Kc. Check wind height against your provider. Defaults and missing wind/humidity are assumptions reported by the moisture sensor. An internal starting moisture level seeds the estimate; missing weather holds the previous level. The estimate is not sensor moisture percent.",
         "data": {
           "name": "Paddock name",
           "enabled": "Enable paddock",
-          "notes": "Management notes",
           "moisture_kind": "Moisture source type",
           "moisture_entity": "Soil/index sensor",
           "moisture_semantics": "Measurement meaning and calibration",
           "moisture_freshness": "Maximum index freshness (seconds)",
           "index_compatible": "Attest FONSCH-compatible dimensionless index",
           "moisture_mode": "How the moisture index affects the WSC estimate",
-          "scenario_enabled": "Enable assumed/estimated scenario",
-          "assumed_wi": "Scenario assumed wi (0–1)",
-          "gdd_base": "Diagnostic GDD base temperature (°C)"
+          "scenario_enabled": "Enable estimated inputs model",
+          "gdd_base": "GDD base temperature (°C)",
+          "carbohydrate_low_cutoff": "Low-to-medium WSC cutoff (% dry matter)",
+          "carbohydrate_high_cutoff": "Medium-to-high WSC cutoff (% dry matter)",
+          "root_depth": "Effective rooting depth (m)",
+          "crop_coefficient": "Pasture water-use coefficient (Kc)",
+          "wind_height": "Weather wind measurement height (m)",
+          "soil_type": "Soil type"
+        }
+      },
+      "measured_inputs": {
+        "title": "Inputs & fallbacks",
+        "description": "Choose any measured sensors first, then your weather provider and fallbacks below. Physical sensors are optional. Sunlight expects irradiance (W/m²); match rain counter type to your gauge. Weather estimates and forecasts remain labelled estimated. Cloud-based sunlight is approximate; leave clear-sky fallback off unless you want missing cloud data treated as clear. Recorded history can fill retained past inputs. Default timing and coverage are ready to use; advanced settings are optional. An ordinary soil moisture reading is shown for reference only: its percentage is not the moisture index used by the WSC model. Estimated soil moisture instead uses rainfall, weather and your paddock's soil type.",
+        "data": {
+          "temperature": "Temperature sensor",
+          "irradiance": "Sunlight sensor (irradiance)",
+          "precipitation": "Rain gauge",
+          "rain_kind": "Rain counter type",
+          "humidity": "Humidity sensor",
+          "wind_speed": "Wind sensor",
+          "soil_entity": "Soil moisture sensor (for reference only)",
+          "weather_entities": "Weather provider (estimates and forecasts)",
+          "allow_estimated": "Use current weather estimates",
+          "allow_forecast": "Use hourly weather forecasts",
+          "historical_backfill": "Fill gaps using recorded weather history",
+          "estimate_solar": "Estimate sunlight from cloud cover",
+          "assume_clear_sky": "Assume clear skies when cloud data is missing",
+          "advanced": "Show advanced settings"
+        }
+      },
+      "soil_details": {
+        "title": "Optional soil sensor details",
+        "description": "This setting applies only to the soil sensor you selected. One-hour freshness is a starting default: increase it if the sensor normally reports less often. This sensor is diagnostic; compatible model indices are configured per paddock.",
+        "data": {
+          "soil_freshness": "Reading expires after (seconds)"
+        }
+      },
+      "weather": {
+        "title": "Weather provider & forecasts",
+        "description": "Choose your weather integration. Current weather estimates and hourly forecasts can both supply estimated inputs. You can skip the provider when using your own sensors. Forecast collection begins now and cannot recover yesterday's predictions. Methods are shown on the paddock's WSC method and Moisture method diagnostics.",
+        "data": {
+          "weather_entities": "Weather provider (estimates and forecasts)",
+          "allow_estimated": "Use current weather estimates",
+          "allow_forecast": "Use hourly forecasts"
+        }
+      },
+      "policies": {
+        "title": "Data gaps & fallbacks",
+        "description": "Use saved Home Assistant history where available. Without a sunlight sensor, cloud-based sunlight is an approximation. Assuming clear sky when cloud data is missing can overestimate sunlight; leave it off unless you want that fallback. Missing moisture weather holds the previous level and is reported under Data gaps. Advanced settings contain calculation time and coverage thresholds; the defaults are practical settings, not accuracy guarantees.",
+        "data": {
+          "historical_backfill": "Import recorded weather history",
+          "estimate_solar": "Estimate sunlight from cloud cover",
+          "assume_clear_sky": "Assume clear sky if cloud data is missing",
+          "advanced": "Review advanced settings"
+        }
+      },
+      "advanced_policies": {
+        "title": "Advanced data settings",
+        "description": "00:15 calculates the previous day in your configured time zone; pending data is retried. Weather coverage 0.8 requires 80% of a day's temperature, humidity, cloud, rain and wind intervals. Solar coverage 1.0 requires complete daily coverage. These are operational thresholds, not validated accuracy limits. Lower thresholds do not reconstruct missing sunlight or rain. Live rain totals instead expose their actual coverage.",
+        "data": {
+          "calculation_time": "Daily calculation time",
+          "minimum_coverage": "Minimum daily weather coverage (0–1)",
+          "solar_minimum_coverage": "Minimum daily sunlight coverage (0–1)",
+          "soil_freshness": "Soil reading expires after (seconds)"
         }
       }
     },
@@ -229,8 +322,7 @@
       "invalid_settings": "Check location, timezone, units and policy values.",
       "invalid_source": "Check source entity domain, variable, semantics, units and counter settings.",
       "invalid_paddocks": "Enter distinct, non-empty paddock names and a growth start date within the past year, no later than today.",
-      "invalid_paddock_settings": "Check paddock name, index compatibility and numeric settings.",
-      "cycle_confirmation_required": "Confirm the current cycle and a valid start date. Reopen this paddock if its cycle changed. If backfill is selected, choose within the past year and ensure recorder contains usable weather history.",
+      "invalid_paddock_settings": "Check paddock name, index compatibility and numeric settings. The low carbohydrate cutoff must be less than the high cutoff.",
       "backfill_failed": "Local weather history could not be imported. See the reason above or the Home Assistant logs."
     },
     "abort": {
@@ -258,16 +350,16 @@
         "name": "Daily precipitation"
       },
       "photoperiod_factor": {
-        "name": "FONSCH photoperiod factor"
+        "name": "Daylength factor (calculated)"
       },
       "temperature_factor": {
-        "name": "FONSCH temperature factor"
+        "name": "Temperature factor (weather inputs)"
       },
       "moisture_factor": {
-        "name": "FONSCH moisture factor"
+        "name": "Moisture factor (measured inputs)"
       },
       "development": {
-        "name": "FONSCH daily development factor"
+        "name": "Daily development (measured inputs)"
       },
       "model_status": {
         "name": "Model status"
@@ -287,68 +379,133 @@
       "soil_diagnostic": {
         "name": "Soil diagnostic status"
       },
+      "carbohydrate_level": {
+        "name": "WSC level (auto)",
+        "state": {
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      },
+      "wsc": {
+        "name": "WSC (auto)"
+      },
       "experimental_wsc": {
-        "name": "Experimental WSC"
+        "name": "WSC (measured inputs)"
       },
       "wsc_trend": {
-        "name": "WSC daily change"
+        "name": "WSC daily change (auto)"
       },
       "scenario_wsc": {
-        "name": "Scenario WSC"
+        "name": "WSC (estimated inputs)"
       },
       "scenario_trend": {
-        "name": "Scenario WSC daily change"
+        "name": "WSC daily change (estimated inputs)"
       },
       "radiation_effect": {
-        "name": "FONSCH radiation contribution"
+        "name": "Solar contribution (weather inputs)"
       },
       "temperature_effect": {
-        "name": "FONSCH temperature contribution"
+        "name": "Temperature contribution (weather inputs)"
       },
       "moisture_effect": {
-        "name": "FONSCH moisture contribution"
+        "name": "Moisture contribution (measured inputs)"
       },
       "spechr": {
-        "name": "Cumulative SPECHR"
+        "name": "SPECHR (measured inputs)"
       },
       "scenario_spechr": {
-        "name": "Scenario cumulative SPECHR"
+        "name": "SPECHR (estimated inputs)"
       },
       "gdd": {
-        "name": "Diagnostic growing degree days"
+        "name": "GDD (measured inputs)"
       },
       "scenario_gdd": {
-        "name": "Scenario growing degree days"
+        "name": "GDD (estimated inputs)"
       },
       "paddock_status": {
-        "name": "Paddock model status"
+        "name": "Calculation status",
+        "state": {
+          "disabled": "Disabled",
+          "ready_measured": "Ready with measured inputs",
+          "ready_estimated": "Ready with estimates",
+          "waiting_first_day": "Waiting for first completed day",
+          "choose_moisture_response": "Choose moisture response in settings",
+          "missing_history": "Missing development history",
+          "waiting_for_soil": "Waiting for compatible soil data",
+          "waiting_weather": "Waiting for weather data"
+        }
       },
       "scenario_status": {
-        "name": "Scenario status"
+        "name": "Model status (estimated inputs)",
+        "state": {
+          "off": "Disabled",
+          "scenario_available": "Ready with estimates",
+          "scenario_pending": "Waiting for inputs",
+          "awaiting_first_completed_day": "Waiting for first completed day"
+        }
       },
       "input_quality": {
-        "name": "Paddock input quality"
+        "name": "WSC method",
+        "state": {
+          "measured": "Measured inputs",
+          "estimated": "Estimated inputs",
+          "no_result": "No result yet"
+        }
       },
       "history_status": {
-        "name": "Development history status"
+        "name": "Development history (measured inputs)"
       },
       "preset": {
         "name": "Model preset"
       },
       "moisture_source": {
-        "name": "Moisture source"
+        "name": "Moisture method",
+        "state": {
+          "measured": "Measured index",
+          "fao_estimate": "FAO estimate",
+          "held_assumption": "Assumed moisture held during data gaps",
+          "starting_assumption": "Assumed starting level",
+          "not_calculated": "Not calculated yet",
+          "no_sensor_configured": "No soil sensor configured",
+          "waiting_for_soil": "Waiting for compatible soil data"
+        }
       },
       "cycle_id": {
         "name": "Growth cycle ID"
       },
-      "reset_status": {
-        "name": "New cycle request status"
-      },
-      "growth_cycle_start": {
-        "name": "Growth cycle start"
-      },
       "paddock_last_completed_day": {
-        "name": "Last completed paddock day"
+        "name": "Calculated through"
+      },
+      "rain_accumulation": {
+        "name": "Rain accumulation (since last cut)"
+      },
+      "rain_accumulation_measured": {
+        "name": "Rain accumulation (measured)"
+      },
+      "rain_accumulation_estimated": {
+        "name": "Rain accumulation (estimated)"
+      },
+      "soil_moisture_measured": {
+        "name": "Soil moisture (measured)"
+      },
+      "soil_moisture_estimated": {
+        "name": "Soil moisture (estimated)"
+      },
+      "scenario_moisture_effect": {
+        "name": "Moisture contribution (estimated inputs)"
+      },
+      "scenario_moisture_factor": {
+        "name": "Moisture factor (estimated inputs)"
+      },
+      "scenario_development": {
+        "name": "Daily development (estimated inputs)"
+      },
+      "measured_model_status": {
+        "name": "Model status (measured inputs)"
+      },
+      "data_gaps": {
+        "name": "Data gaps"
       }
     },
     "switch": {
@@ -356,22 +513,35 @@
         "name": "Enable paddock"
       },
       "scenario_enabled": {
-        "name": "Enable scenario"
+        "name": "Enable estimated inputs model"
       }
     },
-    "number": {
-      "assumed_wi": {
-        "name": "Scenario assumed wi"
+    "date": {
+      "growth_cycle_start": {
+        "name": "Last cut"
       }
     },
-    "text": {
-      "notes": {
-        "name": "Management notes"
+    "select": {
+      "wsc_preference": {
+        "name": "Preferred WSC method",
+        "state": {
+          "primary": "Measured inputs",
+          "scenario": "Estimated inputs"
+        }
+      },
+      "soil_type": {
+        "name": "Soil type",
+        "state": {
+          "unsure": "Unsure",
+          "sandy": "Sandy",
+          "loam": "Loam",
+          "clay": "Clay"
+        }
       }
     },
     "button": {
-      "start_new_growth_cycle": {
-        "name": "Request new growth cycle"
+      "mark_paddock_cut": {
+        "name": "Mark paddock cut"
       }
     }
   },

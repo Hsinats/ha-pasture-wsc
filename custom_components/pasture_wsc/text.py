@@ -5,7 +5,8 @@ from .entity import PaddockEntity
 
 
 async def async_setup_entry(hass,entry,async_add_entities):
-    async_add_entities(PaddockNotes(entry.runtime_data,pid) for pid in entry.runtime_data.store.data["paddocks"])
+    # Retired UI control; retained stored notes are left intact.
+    async_add_entities([])
 
 
 class PaddockNotes(PaddockEntity,TextEntity):

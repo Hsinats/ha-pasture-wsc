@@ -26,6 +26,7 @@ from .weather import (build_intervals, capture, decode_interval, forecast_record
 from .paddocks import initialize_paddocks, calculate_paddock, update_paddock, start_cycle
 from .settings import paddocks_from_names
 from .backfill import fetch_history, location, MAX_HISTORY_DAYS
+from .rain import live_rain
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ def daily_record(day, config, data):
                     rank = config["weather_entities"].index(entity) if entity in config["weather_entities"] else 1000
                     policies[variable].append(SourcePolicy(interval.source,1500+rank,86400,frozenset({Quality.FORECAST})))
     summaries = {}
-    for name in ("temperature","cloud_cover","humidity","precipitation"):
+    for name in ("temperature","cloud_cover","humidity","precipitation","wind_speed"):
         variable = Variable(name)
         summaries[name] = resolve_day(day,config["timezone"],variable,intervals,policies[variable],minimum_coverage=config["minimum_coverage"])
     estimates = estimated_solar(day,config,summaries["cloud_cover"])
@@ -151,7 +152,7 @@ class PastureCoordinator(DataUpdateCoordinator):
 
     async def async_start(self):
         await self.store.load()
-        initialize_paddocks(self.store.data,self.config["paddocks"],self.config["timezone"],{k:self.config[k] for k in ("latitude","longitude","elevation")})
+        initialize_paddocks(self.store.data,self.config["paddocks"],self.config["timezone"],{k:self.config[k] for k in ("latitude","longitude","elevation")},self.config["soil_type"])
         self.store.data["settings_revisions"].append({"at":datetime.now(timezone.utc).isoformat(),"settings":deepcopy(self.config)})
         now = datetime.now(timezone.utc)
         active = {source_key(s) for s in self.sources}
@@ -172,13 +173,28 @@ class PastureCoordinator(DataUpdateCoordinator):
             async_track_state_change_event(self.hass,entities,self._state_event),
             async_track_state_report_event(self.hass,entities,self._state_event),
             async_track_time_interval(self.hass,self._tick,timedelta(minutes=5)),
+            async_track_time_interval(self.hass,self._rain_tick,timedelta(minutes=1)),
         ])
         await self.async_refresh()
         self._schedule()
 
     @callback
     def _state_event(self,event):
-        self.entry.async_create_background_task(self.hass,self.async_collect(),"pasture observation")
+        self.entry.async_create_background_task(self.hass,self._rain_tick(None),"pasture observation")
+
+    async def _rain_tick(self,now):
+        await self.async_collect()
+        async with self._operation_lock:
+            if self.closed or not self.data:
+                return
+            now = datetime.now(timezone.utc)
+            snapshot = deepcopy(self.store.data)
+            updated = deepcopy(self.data)
+            for pid,state in self.store.data["paddocks"].items():
+                totals = await self.hass.async_add_executor_job(live_rain,snapshot,self.config,state["cycle"],now)
+                if pid in updated.get("paddocks",{}):
+                    updated["paddocks"][pid]["live_rain"] = totals
+            self.async_set_updated_data(updated)
 
     async def async_collect(self,initial=False):
         async with self._operation_lock:
@@ -351,6 +367,7 @@ class PastureCoordinator(DataUpdateCoordinator):
                 for row in output["records"]:
                     self.store.paddock_result(row)
                 paddock_outputs[pid] = {**output["latest"],"settings":deepcopy(state["settings"]),
+                    "live_rain":await self.hass.async_add_executor_job(live_rain,snapshot,self.config,cycle,datetime.now(timezone.utc)),
                     "cycle":deepcopy(state["cycle"]),"reset_requested":state["reset_request"] is not None}
             result["paddocks"] = paddock_outputs
             enabled = [p for p in paddock_outputs.values() if p["settings"]["enabled"]]
@@ -366,17 +383,6 @@ class PastureCoordinator(DataUpdateCoordinator):
         async with self._operation_lock:
             update_paddock(self.store.data["paddocks"][pid],changes)
             await self.store.save()
-        await self.async_refresh()
-
-    async def async_request_cycle(self,pid):
-        async with self._operation_lock:
-            state = self.store.data["paddocks"][pid]
-            state["reset_request"] = {"cycle_id":state["cycle"]["id"],"at":datetime.now(timezone.utc).isoformat()}
-            await self.store.save()
-        from homeassistant.components import persistent_notification
-        persistent_notification.async_create(self.hass,
-            f"To set the growth start date for {state['settings']['name']}, open Pasture WSC Configure → Manage paddocks → select this paddock → Set growth start date. Review the date and confirm. The current cycle has not changed.",
-            title="Confirm paddock growth cycle",notification_id=f"pasture_reset_{self.entry.entry_id}_{pid}")
         await self.async_refresh()
 
     async def async_start_cycle(self,pid,start,expected_cycle,confirmed=False,backfill=False):
@@ -397,13 +403,7 @@ class PastureCoordinator(DataUpdateCoordinator):
         day = scheduled_day(datetime.now(timezone.utc),self.config["timezone"],self.config["calculation_time"])
         await self.async_recalculate(day-timedelta(days=6),day)
 
-    async def async_cancel_cycle_request(self,pid):
-        async with self._operation_lock:
-            self.store.data["paddocks"][pid]["reset_request"] = None
-            await self.store.save()
-        await self.async_refresh()
-
-    async def async_add_paddock(self,name,start=None):
+    async def async_add_paddock(self,name,start=None,*,soil_type="unsure"):
         async with self._operation_lock:
             if not name.strip() or name.strip() in {p["settings"]["name"] for p in self.store.data["paddocks"].values()}:
                 raise ValueError("Distinct paddock name required")
@@ -414,7 +414,8 @@ class PastureCoordinator(DataUpdateCoordinator):
             new = paddocks_from_names(name,start)
             if len(new)!=1:
                 raise ValueError("One name required")
-            initialize_paddocks(self.store.data,new,self.config["timezone"],{k:self.config[k] for k in ("latitude","longitude","elevation")})
+            new[0]["soil_type"] = soil_type
+            initialize_paddocks(self.store.data,new,self.config["timezone"],{k:self.config[k] for k in ("latitude","longitude","elevation")},self.config["soil_type"])
             self.config["paddocks"] = self.config["paddocks"]+new
             self.hass.config_entries.async_update_entry(self.entry,data={**self.entry.data,"paddocks":self.config["paddocks"]})
             await self.store.save()

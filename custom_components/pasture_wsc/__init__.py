@@ -71,7 +71,16 @@ async def async_setup_entry(hass,entry):
     entry.runtime_data = coordinator
     try:
         await coordinator.async_start()
-        await hass.config_entries.async_forward_entry_setups(entry,[Platform.SENSOR,Platform.SWITCH,Platform.NUMBER,Platform.TEXT,Platform.BUTTON])
+        # Retire controls replaced by the editable date without leaving unavailable entities.
+        from homeassistant.helpers import entity_registry as er
+        registry = er.async_get(hass)
+        for pid in coordinator.store.data["paddocks"]:
+            for platform, key in (("sensor", "growth_cycle_start"), ("sensor", "reset_status"),
+                                  ("button", "start_new_growth_cycle"), ("text", "notes"), ("number", "assumed_wi")):
+                entity_id = registry.async_get_entity_id(platform, "pasture_wsc", f"{entry.entry_id}_{pid}_{key}")
+                if entity_id is not None:
+                    registry.async_remove(entity_id)
+        await hass.config_entries.async_forward_entry_setups(entry,[Platform.SENSOR,Platform.SWITCH,Platform.DATE,Platform.SELECT,Platform.BUTTON])
     except Exception as error:
         _LOGGER.exception("Pasture WSC setup failed; retained archive is preserved")
         await coordinator.async_close()
@@ -81,7 +90,7 @@ async def async_setup_entry(hass,entry):
 
 async def async_unload_entry(hass,entry):
     from homeassistant.const import Platform
-    if await hass.config_entries.async_unload_platforms(entry,[Platform.SENSOR,Platform.SWITCH,Platform.NUMBER,Platform.TEXT,Platform.BUTTON]):
+    if await hass.config_entries.async_unload_platforms(entry,[Platform.SENSOR,Platform.SWITCH,Platform.DATE,Platform.SELECT,Platform.BUTTON]):
         await entry.runtime_data.async_close()
         return True
     return False

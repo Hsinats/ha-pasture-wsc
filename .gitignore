@@ -5,3 +5,6 @@ __pycache__/
 build/
 dist/
 tmp/
+
+outputs/
+wulfes1999.pdf

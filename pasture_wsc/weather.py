@@ -30,14 +30,15 @@ class Variable(StrEnum):
     PRECIPITATION = "precipitation"
     HUMIDITY = "humidity"
     CLOUD = "cloud_cover"
+    WIND = "wind_speed"
 
 
 UNITS = {Variable.TEMPERATURE: "°C", Variable.IRRADIANCE: "W/m²",
          Variable.SOLAR_ENERGY: "MJ/m²", Variable.PRECIPITATION: "mm",
-         Variable.HUMIDITY: "%", Variable.CLOUD: "%"}
+         Variable.HUMIDITY: "%", Variable.CLOUD: "%", Variable.WIND:"m/s"}
 LIMITS = {Variable.TEMPERATURE: (-90, 65), Variable.IRRADIANCE: (0, 1500),
           Variable.SOLAR_ENERGY: (0, 100), Variable.PRECIPITATION: (0, 2000),
-          Variable.HUMIDITY: (0, 100), Variable.CLOUD: (0, 100)}
+          Variable.HUMIDITY: (0, 100), Variable.CLOUD: (0, 100), Variable.WIND:(0,150)}
 TOTALS = {Variable.SOLAR_ENERGY, Variable.PRECIPITATION}
 
 
@@ -57,6 +58,11 @@ def normalize(variable: Variable, value: float, unit: str, offset: float = 0) ->
             value -= 273.15
         elif unit not in ("°C", "C"):
             raise ValueError("ambiguous_unit")
+    elif variable == Variable.WIND:
+        factors = {"m/s":1,"km/h":1/3.6,"mph":.44704,"kn":.514444,"knots":.514444}
+        if unit not in factors:
+            raise ValueError("ambiguous_unit")
+        value *= factors[unit]
     elif variable == Variable.SOLAR_ENERGY:
         factors = {"MJ/m²": 1, "Wh/m²": .0036, "kWh/m²": 3.6, "J/cm²": .01}
         if unit not in factors:

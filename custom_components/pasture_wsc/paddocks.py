@@ -11,27 +11,41 @@ from .engine import MODEL_VERSION
 from .engine.history import DailyInput, replay
 from .engine.model import SoilIndex, MoistureMode, calculate
 from .engine.astronomy import local_day_bounds
+from .soil import estimate_day
+from .const import SOIL_TYPES
 
 PRESET = "vigor_regrowth_n40_spec_response"
-DEFAULT_PADDOCK = {"enabled":True,"preset":PRESET,"notes":"","moisture_kind":"unknown",
+WSC_ROUTES = ("primary", "scenario")
+DEFAULT_PADDOCK = {"root_depth":.5,"crop_coefficient":.85,"wind_height":10.0,"soil_type":"unsure","enabled":True,"preset":PRESET,"notes":"","moisture_kind":"unknown",
     "moisture_entity":"","moisture_semantics":"Unknown; no soil conversion",
     "moisture_freshness":3600,"index_compatible":False,"moisture_mode":"unset",
-    "scenario_enabled":False,"assumed_wi":.47,"gdd_base":5.0}
+    "scenario_enabled":False,"assumed_wi":.47,"gdd_base":5.0,"wsc_preference":"primary",
+    "carbohydrate_low_cutoff":10.0,"carbohydrate_high_cutoff":20.0}
 
 
 def validate_paddock(value):
     p = {**deepcopy(DEFAULT_PADDOCK),**deepcopy(value)}
+    if p["soil_type"] not in SOIL_TYPES:
+        raise ValueError("Unknown soil type")
     p.pop("moisture_justification",None)
     if not p.get("id") or not p.get("name","").strip() or len(p["name"]) > 100:
         raise ValueError("Paddock ID and name required")
     date.fromisoformat(p["start_date"])
     if p["preset"] != PRESET or p["moisture_kind"] not in ("unknown","shared_diagnostic","diagnostic_sensor","calibrated_index"):
         raise ValueError("Unknown preset or moisture source")
+    for key in ("carbohydrate_low_cutoff", "carbohydrate_high_cutoff"):
+        p[key] = float(p[key])
+        if not isfinite(p[key]):
+            raise ValueError("Carbohydrate cutoffs must be finite")
+    if not 0 < p["carbohydrate_low_cutoff"] < p["carbohydrate_high_cutoff"] <= 100:
+        raise ValueError("Carbohydrate cutoffs must be ordered percentages between 0 and 100")
+    if p["wsc_preference"] not in WSC_ROUTES:
+        raise ValueError("Unknown WSC route preference")
     if p["moisture_mode"] != "unset":
         MoistureMode(p["moisture_mode"])
     if p["moisture_kind"] in ("diagnostic_sensor","calibrated_index") and not p["moisture_entity"].startswith("sensor."):
         raise ValueError("Select a soil/index sensor")
-    for key,low,high in (("assumed_wi",0,1),("moisture_freshness",60,86400),("gdd_base",-10,20)):
+    for key,low,high in (("root_depth",.1,3),("crop_coefficient",.1,1.5),("wind_height",.5,100),("assumed_wi",0,1),("moisture_freshness",60,86400),("gdd_base",-10,20)):
         v = float(p[key])
         if not isfinite(v) or not low <= v <= high:
             raise ValueError("Invalid paddock numeric setting")
@@ -43,14 +57,86 @@ def validate_paddock(value):
     return p
 
 
-def initialize_paddocks(data, configured, zone, location=None):
+def selected_wsc(paddock, settings):
+    """Choose a current finite result without depending on route sensor entities."""
+    if not settings.get("enabled", True):
+        return None, None
+    preferred = settings.get("wsc_preference", "primary")
+    routes = (preferred, "scenario" if preferred == "primary" else "primary")
+    for route in routes:
+        if route == "scenario" and not settings.get("scenario_enabled", False):
+            continue
+        value = paddock.get(route, {}).get("experimental_wsc")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
+            return route, value
+    return None, None
+
+
+def carbohydrate_level(paddock, settings):
+    """Descriptive WSC bands, not animal-specific feeding or safety thresholds."""
+    _, value = selected_wsc(paddock, settings)
+    if value is None:
+        return None
+    low = settings.get("carbohydrate_low_cutoff", 10.0)
+    high = settings.get("carbohydrate_high_cutoff", 20.0)
+    return "low" if value < low else "medium" if value < high else "high"
+
+
+def diagnostic_summary(paddock, settings):
+    """User-facing diagnostics follow the same current route as WSC (auto)."""
+    route,value = selected_wsc(paddock,settings)
+    method = paddock.get("selected_moisture_method")
+    estimate = paddock.get("estimated_soil",{})
+    history_gap = paddock.get("scenario_history_gap") if settings.get("scenario_enabled") else paddock.get("history_gap")
+    if route == "primary" or method == "measured":
+        moisture = "measured"
+    elif settings.get("scenario_enabled"):
+        moisture = {"measured":"measured","weather_estimate":"fao_estimate",
+                    "held_assumption":"held_assumption","fixed_assumption":"starting_assumption"}.get(method,"not_calculated")
+    else:
+        moisture = "no_sensor_configured" if settings.get("moisture_kind","unknown") != "calibrated_index" else "waiting_for_soil"
+    if not settings.get("enabled",True):
+        status = "disabled"
+    elif value is not None:
+        status = "ready_measured" if route == "primary" else "ready_estimated"
+    elif paddock.get("status") == "awaiting_first_completed_day":
+        status = "waiting_first_day"
+    elif settings.get("moisture_mode","unset") == "unset":
+        status = "choose_moisture_response"
+    elif not settings.get("scenario_enabled") and paddock.get("status") == "pending_soil":
+        status = "waiting_for_soil"
+    elif history_gap:
+        status = "missing_history"
+    else:
+        status = "waiting_weather"
+    assumed = estimate.get("assumed_days",0) if route == "scenario" or (route is None and settings.get("scenario_enabled")) else 0
+    missing_development = (paddock.get("scenario_days",0)-paddock.get("scenario_valid_development_days",0)
+                           if settings.get("scenario_enabled") and route != "primary" else 0)
+    gaps = []
+    if assumed:
+        gaps.append(f"{assumed} day{'s' if assumed != 1 else ''} used assumed moisture")
+    if missing_development:
+        gaps.append(f"{missing_development} day{'s' if missing_development != 1 else ''} missing development inputs")
+    if not gaps:
+        gaps.append("No gaps in selected calculation" if route else "Not calculated yet")
+    return {"calculation_status":status,"wsc_method":"measured" if route == "primary" else "estimated" if route else "no_result",
+            "moisture_method":moisture,"calculated_through":paddock.get("day") if route else None,
+            "data_gaps":"; ".join(gaps),"assumed_moisture_days":assumed,
+            "missing_development_days":missing_development}
+
+
+def initialize_paddocks(data, configured, zone, location=None, soil_type="unsure"):
     data.setdefault("paddocks",{})
     data.setdefault("paddock_results",{})
     data.setdefault("soil_observations",[])
+    for existing in data["paddocks"].values():
+        existing["settings"].setdefault("soil_type",soil_type)
+        for key in ("root_depth","crop_coefficient","wind_height"):
+            existing["settings"].setdefault(key,DEFAULT_PADDOCK[key])
     for value in configured:
         if value["id"] in data["paddocks"]:
             continue
-        p = validate_paddock(value)
+        p = validate_paddock({"soil_type":soil_type,**value})
         cycle = {"id":uuid4().hex,"start_date":p["start_date"],"timezone":zone,
                  "location":deepcopy(location),
                  "initialization":"pragmatic_date_reset_not_dry_matter_threshold","archived_at":None}
@@ -125,9 +211,15 @@ def calculate_paddock(state,end,weather,soil_observations,config):
         return {"latest":{"day":end.isoformat(),"status":"disabled" if not p["enabled"] else "cycle_range_exceeds_limit" if (end-start).days>3660 else "awaiting_first_completed_day",
                            "scenario_status":"off" if not p["scenario_enabled"] else "awaiting_first_completed_day",
                            "primary":{},"scenario":{},"gdd":None,"scenario_gdd":None,"last_completed_day":None,
+                           "rain_accumulation":{"value":0.0,"start_date":start.isoformat(),
+                               "end_date":None,"days_with_data":0,"missing_days":0,"complete":False},
                            "history_gap":False,"soil":{},"warnings":["experimental_unvalidated",cycle["initialization"]]},"records":[]}
     mode = None if p["moisture_mode"] == "unset" else MoistureMode(p["moisture_mode"])
     primary,scenario,soil_days = {},{},{}
+    estimated_soil_days, moisture_routes = {}, {}
+    previous_estimate = None
+    rain_total, rain_days = 0.0, 0
+    rain_summaries = {}
     cumulative_gdd,scenario_gdd,gdd_gap,scenario_gdd_gap = 0.0,0.0,False,False
     gdds,scenario_gdds = {},{}
     for offset in range(max(0,(end-start).days+1)):
@@ -137,6 +229,16 @@ def calculate_paddock(state,end,weather,soil_observations,config):
                        cycle.get("location") is not None and record.get("location") != cycle["location"]):
             record = {}
         w = record.get("weather",{})
+        rain = w.get("precipitation",{}).get("value")
+        rain_valid = isinstance(rain,(int,float)) and not isinstance(rain,bool) and isfinite(rain) and rain >= 0
+        if rain_valid:
+            rain_total += rain
+            rain_days += 1
+        rain_summaries[day] = {"value":rain_total,
+            "start_date":start.isoformat(),"end_date":day.isoformat(),
+            "days_with_data":rain_days,"missing_days":offset+1-rain_days,
+            "complete":rain_days == offset+1,"daily_rainfall_mm":rain if rain_valid else None,
+            "basis":"available_daily_rainfall_including_forecast_estimates"}
         temperature = w.get("temperature",{}).get("value")
         radiation = w.get("solar_energy",{}).get("value")
         t_strict = all(i["quality"] in ("observed","provider") for i in w.get("temperature",{}).get("intervals",[]))
@@ -145,10 +247,22 @@ def calculate_paddock(state,end,weather,soil_observations,config):
         soil_days[day] = soil
         known = p["moisture_kind"] == "calibrated_index" and p["index_compatible"] and soil["value"] is not None
         index = SoilIndex(soil["value"],p["moisture_semantics"],True) if known else None
+        estimate = estimate_day(previous_estimate,w,p.get("soil_type",config.get("soil_type","unsure")),p["assumed_wi"],
+            day=day,latitude=config["latitude"],elevation=config["elevation"],
+            root_depth=p.get("root_depth",.5),crop_coefficient=p.get("crop_coefficient",.85),wind_height=p.get("wind_height",10))
+        previous_estimate = estimate
+        estimated_soil_days[day] = estimate
+        soil["measured_value"] = index.value if index is not None else None
         hashes = (record.get("hash","missing_weather"),soil["hash"])
         primary[day] = DailyInput(record.get("daylength"),temperature if t_strict else None,
                                   radiation if r_strict else None,index,hashes)
         assumed = index if index is not None else SoilIndex(p["assumed_wi"],"Explicit whole-cycle assumed wi scenario",True,True)
+        moisture_routes[day] = "measured" if index is not None else "fixed_assumption"
+        if index is None and estimate["value"] is not None:
+            assumed = SoilIndex(estimate["value"],"Uncalibrated rainfall/drying bucket proxy for wi",True,True)
+            moisture_routes[day] = "weather_estimate" if estimate["status"] == "weather_estimate" else "held_assumption"
+        estimate_hash = sha256(json.dumps(estimate,sort_keys=True).encode()).hexdigest()
+        hashes = (*hashes,estimate_hash,moisture_routes[day])
         scenario[day] = DailyInput(record.get("daylength"),temperature,radiation,assumed,hashes,not(t_strict and r_strict))
         if temperature is None or not t_strict:
             gdd_gap = True
@@ -183,6 +297,8 @@ def calculate_paddock(state,end,weather,soil_observations,config):
             "scenario_missing_development_days":scenario_missing_days[:31].copy(),
             "scenario_history_gap":scenarios[n].incomplete_history if scenarios else None,
             "history_gap":r.incomplete_history,"soil":soil_days[r.day],
+            "estimated_soil":estimated_soil_days[r.day],"selected_moisture_method":moisture_routes[r.day],
+            "rain_accumulation":rain_summaries[r.day],
             "weather_effects":{"radiation_effect":effects.radiation_effect,"temperature_effect":effects.temperature_effect},
             "weather_quality":sorted({i["quality"] for key in ("temperature","solar_energy") for i in observed_day.get("weather",{}).get(key,{}).get("intervals",[])}),
             "settings":deepcopy(p),"timezone":cycle["timezone"],"initialization":cycle["initialization"],
@@ -193,6 +309,15 @@ def calculate_paddock(state,end,weather,soil_observations,config):
         row["status"] = "ready_experimental" if r.components.experimental_wsc is not None else "pending_soil" if primary[r.day].soil is None else "incomplete_history" if r.incomplete_history else "pending_moisture_mode" if mode is None else "pending_weather"
         row["scenario_status"] = "off" if not scenarios else "scenario_available" if scenarios[n].components.experimental_wsc is not None else "scenario_pending"
         row["warnings"] = list(r.components.warnings)+[cycle["initialization"]]
+        # Compare the final selected WSC on adjacent days, allowing either route.
+        current_wsc = selected_wsc(row, p)[1]
+        previous_wsc = selected_wsc(rows[-1], p)[1] if rows else None
+        row["daily_change"] = (current_wsc-previous_wsc
+                               if current_wsc is not None and previous_wsc is not None else None)
+        current_scenario = row["scenario"].get("experimental_wsc")
+        previous_scenario = rows[-1]["scenario"].get("experimental_wsc") if rows else None
+        row["scenario_daily_change"] = (current_scenario-previous_scenario
+                                        if current_scenario is not None and previous_scenario is not None else None)
         row["hash"] = sha256(json.dumps(row,sort_keys=True).encode()).hexdigest()
         rows.append(row)
     return {"latest":rows[-1],"records":rows}

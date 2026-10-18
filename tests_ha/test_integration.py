@@ -20,10 +20,9 @@ async def test_flow_creates_three_paddocks(hass):
     result = await hass.config_entries.flow.async_init(DOMAIN,context={"source":SOURCE_USER})
     assert result["type"] == FlowResultType.FORM
     result = await hass.config_entries.flow.async_configure(result["flow_id"],{k:entry_data()[k] for k in ("latitude","longitude","elevation","timezone")})
-    assert result["step_id"] == "weather"
-    policy = {k:entry_data()[k] for k in ("weather_entities","calculation_time","minimum_coverage","solar_minimum_coverage",
-                                        "allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
-    result = await hass.config_entries.flow.async_configure(result["flow_id"],policy)
+    assert result["step_id"] == "measured_inputs"
+    inputs = {k:entry_data()[k] for k in ("weather_entities","allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky")}
+    result = await hass.config_entries.flow.async_configure(result["flow_id"],inputs)
     assert result["step_id"] == "paddocks"
     result = await hass.config_entries.flow.async_configure(result["flow_id"],{"names":"Summer\nWinter\nBack","start_date":date.today().isoformat()})
     assert result["type"] == FlowResultType.MENU
@@ -44,10 +43,12 @@ async def test_setup_reload_pending_entities_and_store(hass):
     assert entry.runtime_data.data["moisture_factor"] is None
     assert entry.runtime_data.data["last_completed_day"] is None
     sensors = hass.states.async_all("sensor")
-    from custom_components.pasture_wsc.sensor import PADDOCK_SENSORS
-    assert len(sensors) == 16 + 3 * len(PADDOCK_SENSORS)
+    from custom_components.pasture_wsc.sensor import PADDOCK_SENSORS, SENSORS
+    assert len(sensors) == sum(d.entity_registry_enabled_default for d in SENSORS) + 3 * sum(d.entity_registry_enabled_default for d in PADDOCK_SENSORS)
     assert len(hass.states.async_all("switch")) == 6
     assert len(hass.states.async_all("button")) == 3
+    assert len(hass.states.async_all("date")) == 3
+    assert len(hass.states.async_all("select")) == 6
     saved = deepcopy(entry.runtime_data.store.data["daily"])
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -63,9 +64,9 @@ async def test_options_and_reconfigure_preserve_paddocks(hass):
     before = deepcopy(entry.data["paddocks"])
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(result["flow_id"],{"next_step_id":"weather_settings"})
-    policy = {k:entry_data()[k] for k in ("weather_entities","calculation_time","minimum_coverage","solar_minimum_coverage",
-                                        "allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky","soil_semantics","soil_freshness")}
-    result = await hass.config_entries.options.async_configure(result["flow_id"],{**policy,"allow_estimated":True})
+    inputs = {k:entry_data()[k] for k in ("weather_entities","allow_estimated","allow_forecast","historical_backfill","estimate_solar","assume_clear_sky")}
+    result = await hass.config_entries.options.async_configure(result["flow_id"],{**inputs,"allow_estimated":True})
+    assert result["step_id"] == "init"
     result = await hass.config_entries.options.async_configure(result["flow_id"],{"next_step_id":"finish"})
     assert result["type"] == FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
