@@ -245,8 +245,8 @@ def test_wsc_preference_persists_and_invalid_preference_rejected():
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("value,expected", [(0, "low"), (9.999, "low"), (10, "medium"),
-                                            (19.999, "medium"), (20, "high"), (25, "high"),
+@pytest.mark.parametrize("value,expected", [(0, "low"), (7.999, "low"), (8, "medium"),
+                                            (11.999, "medium"), (12, "high"), (25, "high"),
                                             (None, None), (float("nan"), None)])
 def test_carbohydrate_level_boundaries(value, expected):
     from custom_components.pasture_wsc.paddocks import carbohydrate_level

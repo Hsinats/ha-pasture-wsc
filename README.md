@@ -350,17 +350,24 @@ saved per paddock and survives reloads.
 ### Plain-language carbohydrate level
 
 **Pasture carbohydrate level** uses the same preferred-route selection and fallback as
-**Water-soluble carbohydrates**, displaying Low below 10%, Medium from 10% to below
-20%, and High at 20% or above. Values are percentages of dry matter. Missing estimates
+**Water-soluble carbohydrates**, displaying Low below 8%, Medium from 8% to below
+12%, and High at 12% or above. Values are percentages of dry matter. Missing estimates
 make this sensor unavailable; they are never classified as Low. Classification uses
 full precision before display rounding. The percentage, route and cutoffs remain in
 its attributes. Edit both cutoffs under paddock settings; the lower must be positive
 and below the upper, and the upper cannot exceed 100%.
 
-These are application-defined descriptive bands, based on the 10–20% typical grass
-WSC range at harvest in [NC State Extension's forage conservation guide](https://content.ces.ncsu.edu/forage-conservation-techniques-silage-and-haylage-production).
-They are not a published universal three-level classification or grazing-safety limits.
-The commonly cited 10–12% guidance for susceptible horses concerns nonstructural
-carbohydrates (WSC plus starch), as explained by [University of Minnesota Extension](https://extension.umn.edu/agriculture/animals-and-livestock/horse/understanding-your-hay-analysis).
+These are application-defined caution bands, not validated WSC grazing-safety limits.
+The 8% lower cutoff is a design choice that leaves a nominal two percentage points
+for unmeasured starch relative to a 10% total NSC target; it does not assume that
+starch is actually 2% or account for model error. The 12% upper cutoff flags WSC
+alone reaching the upper end of the 10�12% NSC guidance for susceptible horses in
+[University of Minnesota Extension's hay analysis guide](https://extension.umn.edu/agriculture/animals-and-livestock/horse/understanding-your-hay-analysis).
+The [ECEIM consensus on equine metabolic syndrome](https://pmc.ncbi.nlm.nih.gov/articles/PMC6430910/)
+recommends hay with NSC below 10% for horses with insulin dysregulation. These are
+hay/diet recommendations, not validated thresholds for weather-based pasture estimates.
+Low does not mean safe to graze. All bands use percent dry matter.
+Existing paddocks retain saved cutoffs; set them to 8 and 12 in paddock settings
+to adopt the new defaults.
 This experimental model estimates WSC alone and does not measure starch or establish
 animal-specific safety.

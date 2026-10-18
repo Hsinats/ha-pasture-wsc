@@ -540,11 +540,11 @@ def test_default_wsc_uses_coordinator_and_live_preference(ha_contract):
         assert live.native_value == value
         assert live.entity_description.state_class == "measurement"
         assert live.extra_state_attributes["coverage"] == result["live_rain"][route]["coverage"]
-    assert level.native_value == "medium" and level.available
+    assert level.native_value == "high" and level.available
     assert level.entity_description.options == ["low", "medium", "high"]
     assert level.extra_state_attributes["estimated_percentage"] == 12.3456
-    assert level.extra_state_attributes["low_cutoff_percent"] == 10
-    assert level.extra_state_attributes["high_cutoff_percent"] == 20
+    assert level.extra_state_attributes["low_cutoff_percent"] == 8
+    assert level.extra_state_attributes["high_cutoff_percent"] == 12
     preference = WSCPreferenceSelect(coordinator, pid)
     assert preference.current_option == "primary"
     assert sensor.available and sensor.native_value == 12.3456

@@ -355,8 +355,8 @@ class PastureWSCOptionsFlow(SourceSteps, OptionsFlowWithReload):
                 {"value":"one_minus_wi_over_reference","label":"Higher moisture index decreases the WSC estimate"},
             ])),
             vol.Required("scenario_enabled",default=p["scenario_enabled"]):selector.BooleanSelector(),
-            vol.Required("carbohydrate_low_cutoff",default=p.get("carbohydrate_low_cutoff",10.0)):selector.NumberSelector(selector.NumberSelectorConfig(min=.1,max=99.9,step=.1,mode="box")),
-            vol.Required("carbohydrate_high_cutoff",default=p.get("carbohydrate_high_cutoff",20.0)):selector.NumberSelector(selector.NumberSelectorConfig(min=.1,max=100,step=.1,mode="box")),
+            vol.Required("carbohydrate_low_cutoff",default=p.get("carbohydrate_low_cutoff",8.0)):selector.NumberSelector(selector.NumberSelectorConfig(min=.1,max=99.9,step=.1,mode="box")),
+            vol.Required("carbohydrate_high_cutoff",default=p.get("carbohydrate_high_cutoff",12.0)):selector.NumberSelector(selector.NumberSelectorConfig(min=.1,max=100,step=.1,mode="box")),
             vol.Required("gdd_base",default=p["gdd_base"]):selector.NumberSelector(selector.NumberSelectorConfig(min=-10,max=20,mode="box")),
         })
         return self.async_show_form(step_id="paddock_settings",data_schema=self.add_suggested_values_to_schema(schema,p),errors=errors)

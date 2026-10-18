@@ -20,7 +20,7 @@ DEFAULT_PADDOCK = {"root_depth":.5,"crop_coefficient":.85,"wind_height":10.0,"so
     "moisture_entity":"","moisture_semantics":"Unknown; no soil conversion",
     "moisture_freshness":3600,"index_compatible":False,"moisture_mode":"unset",
     "scenario_enabled":False,"assumed_wi":.47,"gdd_base":5.0,"wsc_preference":"primary",
-    "carbohydrate_low_cutoff":10.0,"carbohydrate_high_cutoff":20.0}
+    "carbohydrate_low_cutoff":8.0,"carbohydrate_high_cutoff":12.0}
 
 
 def validate_paddock(value):
@@ -77,8 +77,8 @@ def carbohydrate_level(paddock, settings):
     _, value = selected_wsc(paddock, settings)
     if value is None:
         return None
-    low = settings.get("carbohydrate_low_cutoff", 10.0)
-    high = settings.get("carbohydrate_high_cutoff", 20.0)
+    low = settings.get("carbohydrate_low_cutoff", 8.0)
+    high = settings.get("carbohydrate_high_cutoff", 12.0)
     return "low" if value < low else "medium" if value < high else "high"
 
 

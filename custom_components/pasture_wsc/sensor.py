@@ -271,8 +271,8 @@ class PaddockSensor(PaddockEntity,SensorEntity):
             if self.entity_description.key == "carbohydrate_level":
                 attributes.update({
                     "estimated_percentage": value,
-                    "low_cutoff_percent": self.settings.get("carbohydrate_low_cutoff", 10.0),
-                    "high_cutoff_percent": self.settings.get("carbohydrate_high_cutoff", 20.0),
+                    "low_cutoff_percent": self.settings.get("carbohydrate_low_cutoff", 8.0),
+                    "high_cutoff_percent": self.settings.get("carbohydrate_high_cutoff", 12.0),
                     "classification_basis": "descriptive_wsc_bands",
                 })
             return attributes
