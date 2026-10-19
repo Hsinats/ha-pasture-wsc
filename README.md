@@ -23,8 +23,8 @@ Use forage testing and veterinary advice for feeding and grazing decisions.
 
 ## Setup
 
-1. Copy `custom_components/pasture_wsc` into your Home Assistant `custom_components` directory.
-2. Restart Home Assistant, then add **Pasture WSC** under **Settings → Devices & services → Add integration**.
+1. Install **Pasture WSC** through HACS and restart Home Assistant.
+2. Add **Pasture WSC** under **Settings → Devices & services → Add integration**.
 3. Select your weather inputs, add your paddocks, and enable any estimates you want to use.
 
 See the [setup and technical guide](docs/guide.md) for detailed configuration.
